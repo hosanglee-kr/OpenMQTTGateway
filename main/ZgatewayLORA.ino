@@ -222,7 +222,7 @@ uint8_t _determineDevice(JsonObject& LORAdata) {
 /*
 Create JSON information from WiPhone packet
  */
-boolean _WiPhoneToMQTT(byte* packet, JsonObject& LORAdata) {
+boolean _WiPhonetoX(byte* packet, JsonObject& LORAdata) {
   // Decode the LoRa packet and send over MQTT
   wiphone_message* msg = (wiphone_message*)packet;
 
@@ -347,6 +347,21 @@ void LORAConfig_fromJson(JsonObject& LORAdata) {
     StaticJsonDocument<JSON_MSG_BUFFER> jsonBuffer;
     JsonObject jo = jsonBuffer.to<JsonObject>();
     jo["frequency"] = LORAConfig.frequency;
+    jo["txpower"] = LORAConfig.txPower;
+    jo["spreadingfactor"] = LORAConfig.spreadingFactor;
+    jo["signalbandwidth"] = LORAConfig.signalBandwidth;
+    jo["codingrate"] = LORAConfig.codingRateDenominator;
+    jo["preamblelength"] = LORAConfig.preambleLength;
+    if (LORAConfig.syncWord < 0 || LORAConfig.syncWord > 255) {
+      Log.error(F("Invalid syncWord value: %d" CR), LORAConfig.syncWord);
+    } else {
+      char syncWordHex[5];
+      snprintf(syncWordHex, sizeof(syncWordHex), "0x%02X", LORAConfig.syncWord);
+      jo["syncword"] = syncWordHex;
+    }
+    jo["enablecrc"] = LORAConfig.crc;
+    jo["invertiq"] = LORAConfig.invertIQ;
+    jo["onlyknown"] = LORAConfig.onlyKnown;
     // Save config into NVS (non-volatile storage)
     String conf = "";
     serializeJson(jsonBuffer, conf);
@@ -388,7 +403,7 @@ void setupLORA() {
   Log.trace(F("ZgatewayLORA setup done" CR));
 }
 
-void LORAtoMQTT() {
+void LORAtoX() {
   int packetSize = LoRa.parsePacket();
   if (packetSize) {
     StaticJsonDocument<JSON_MSG_BUFFER> LORAdataBuffer;
@@ -412,7 +427,7 @@ void LORAtoMQTT() {
     packet[packetSize] = 0;
     uint8_t deviceId = _determineDevice(packet, packetSize);
     if (deviceId == WIPHONE) {
-      _WiPhoneToMQTT(packet, LORAdata);
+      _WiPhonetoX(packet, LORAdata);
     } else if (binary) {
       if (LORAConfig.onlyKnown) {
         Log.trace(F("Ignoring non identifiable packet" CR));
@@ -420,7 +435,7 @@ void LORAtoMQTT() {
       }
       // We have non-ascii data: create hex string of the data
       char hex[packetSize * 2 + 1];
-      _rawToHex(packet, hex, packetSize);
+      TheengsUtils::_rawToHex(packet, hex, packetSize);
       // Terminate with a null character
       hex[packetSize * 2] = 0;
 
@@ -458,17 +473,17 @@ void LORAtoMQTT() {
       LORAdataBuffer["origin"] = subjectLORAtoMQTT;
     }
 
-    handleJsonEnqueue(LORAdata);
+    enqueueJsonObject(LORAdata);
     if (repeatLORAwMQTT) {
       Log.trace(F("Pub LORA for rpt" CR));
       LORAdata["origin"] = subjectMQTTtoLORA;
-      handleJsonEnqueue(LORAdata);
+      enqueueJsonObject(LORAdata);
     }
   }
 }
 
 #  if jsonReceiving
-void MQTTtoLORA(char* topicOri, JsonObject& LORAdata) { // json object decoding
+void XtoLORA(const char* topicOri, JsonObject& LORAdata) { // json object decoding
   if (cmpToMainTopic(topicOri, subjectMQTTtoLORA)) {
     Log.trace(F("MQTTtoLORA json" CR));
     const char* message = LORAdata["message"];
@@ -482,7 +497,7 @@ void MQTTtoLORA(char* topicOri, JsonObject& LORAdata) { // json object decoding
       } else if (hex) {
         // We have hex data: create convert to binary
         byte raw[strlen(hex) / 2];
-        _hexToRaw(hex, raw, sizeof(raw));
+        TheengsUtils::_hexToRaw(hex, raw, sizeof(raw));
         LoRa.write((uint8_t*)raw, sizeof(raw));
       } else {
         // ascii payload
@@ -492,7 +507,8 @@ void MQTTtoLORA(char* topicOri, JsonObject& LORAdata) { // json object decoding
       LoRa.endPacket();
       Log.trace(F("MQTTtoLORA OK" CR));
       // we acknowledge the sending by publishing the value to an acknowledgement topic, for the moment even if it is a signal repetition we acknowledge also
-      pub(subjectGTWLORAtoMQTT, LORAdata);
+      LORAdata["origin"] = subjectGTWLORAtoMQTT;
+      enqueueJsonObject(LORAdata);
     } else {
       Log.error(F("MQTTtoLORA Fail json" CR));
     }
@@ -520,7 +536,7 @@ void MQTTtoLORA(char* topicOri, JsonObject& LORAdata) { // json object decoding
 }
 #  endif
 #  if simpleReceiving
-void MQTTtoLORA(char* topicOri, char* LORAarray) { // json object decoding
+void XtoLORA(const char* topicOri, const char* LORAarray) { // json object decoding
   if (cmpToMainTopic(topicOri, subjectMQTTtoLORA)) {
     LoRa.beginPacket();
     LoRa.print(LORAarray);
@@ -541,15 +557,18 @@ String stateLORAMeasures() {
   LORAdata["signalbandwidth"] = LORAConfig.signalBandwidth;
   LORAdata["codingrate"] = LORAConfig.codingRateDenominator;
   LORAdata["preamblelength"] = LORAConfig.preambleLength;
-  // Convert syncWord to a hexadecimal string and store it in the JSON
-  char syncWordHex[5]; // Enough space for 0xXX and null terminator
-  snprintf(syncWordHex, sizeof(syncWordHex), "0x%02X", LORAConfig.syncWord);
-  LORAdata["syncword"] = syncWordHex;
+  if (LORAConfig.syncWord < 0 || LORAConfig.syncWord > 255) {
+    Log.error(F("Invalid syncWord value: %d" CR), LORAConfig.syncWord);
+  } else {
+    char syncWordHex[5];
+    snprintf(syncWordHex, sizeof(syncWordHex), "0x%02X", LORAConfig.syncWord);
+    LORAdata["syncword"] = syncWordHex;
+  }
   LORAdata["enablecrc"] = LORAConfig.crc;
   LORAdata["invertiq"] = LORAConfig.invertIQ;
   LORAdata["onlyknown"] = LORAConfig.onlyKnown;
-
-  pub(subjectGTWLORAtoMQTT, LORAdata);
+  LORAdata["origin"] = subjectGTWLORAtoMQTT;
+  enqueueJsonObject(LORAdata);
 
   String output;
   serializeJson(LORAdata, output);

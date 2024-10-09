@@ -64,8 +64,7 @@ void MeasureGPIOInput() {
         resetTime = millis();
       } else if ((millis() - resetTime) > 3000) {
         Log.trace(F("Button Held" CR));
-        InfoIndicatorOFF();
-        SendReceiveIndicatorOFF();
+        gatewayState = GatewayState::WAITING_ONBOARDING;
 // Switching off the relay during reset or failsafe operations
 #    ifdef ZactuatorONOFF
         uint8_t level = digitalRead(ACTUATOR_ONOFF_GPIO);
@@ -74,7 +73,7 @@ void MeasureGPIOInput() {
         }
 #    endif
         Log.notice(F("Erasing ESP Config, restarting" CR));
-        setupwifi(true);
+        erase(true);
       }
     } else {
       resetTime = 0;
@@ -92,7 +91,7 @@ void MeasureGPIOInput() {
         GPIOdata["gpio"] = "LOW";
       }
       GPIOdata["origin"] = subjectGPIOInputtoMQTT;
-      handleJsonEnqueue(GPIOdata);
+      enqueueJsonObject(GPIOdata);
 
 #  if defined(ZactuatorONOFF) && defined(ACTUATOR_TRIGGER)
       //Trigger the actuator if we are not at startup

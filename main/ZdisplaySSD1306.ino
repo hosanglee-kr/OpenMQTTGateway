@@ -38,6 +38,9 @@
 #  include "ArduinoLog.h"
 #  include "User_config.h"
 #  include "config_SSD1306.h"
+#  ifdef DISPLAY_BLANKING
+#    include "driver/touch_sensor.h"
+#  endif
 
 SemaphoreHandle_t semaphoreOLEDOperation;
 
@@ -83,6 +86,17 @@ void setupSSD1306() {
 boolean logoDisplayed = false;
 unsigned long nextDisplayPage = uptime() + DISPLAY_PAGE_INTERVAL;
 
+#  ifdef DISPLAY_BLANKING
+unsigned long blankingStart = uptime() + DISPLAY_BLANKING_START;
+
+touch_value_t touchReadings[TOUCH_READINGS] = {0};
+touch_value_t touchCurrentReading = 0;
+int touchIndex = 0;
+int touchTotal = 0;
+int touchAverage = 0;
+int touchThreshold = 0;
+#  endif
+
 /*
 module loop, for use in Arduino loop
 */
@@ -92,6 +106,26 @@ void loopSSD1306() {
 
   long enough since the last message and display not being used and a queue message waiting
   */
+
+#  ifdef DISPLAY_BLANKING
+  // Log.trace(F("touchAverage %d, touchCurrentReading %d, touchThreshold %d" CR), touchAverage, touchCurrentReading, touchThreshold);
+  touchTotal = touchTotal - touchReadings[touchIndex];
+  touchCurrentReading = touchRead(DISPLAY_BLANKING_TOUCH_GPIO);
+  touchReadings[touchIndex] = touchCurrentReading;
+  touchTotal = touchTotal + touchReadings[touchIndex];
+  touchIndex = (touchIndex + 1) % TOUCH_READINGS;
+  touchAverage = touchTotal / TOUCH_READINGS;
+  touchThreshold = touchAverage * TOUCH_THRESHOLD;
+
+  if ((touchCurrentReading > touchAverage + touchThreshold || touchCurrentReading < touchAverage - touchThreshold) && displayState) {
+    blankingStart = uptime() + DISPLAY_BLANKING_START;
+    Oled.display->displayOn();
+  }
+  if (uptime() > blankingStart && displayState) {
+    Oled.display->displayOff();
+  }
+#  endif
+
   if (jsonDisplay && displayState) {
     if (uptime() >= nextDisplayPage && uxSemaphoreGetCount(semaphoreOLEDOperation) && currentWebUIMessage && newSSD1306Message) {
       if (!Oled.displayPage(currentWebUIMessage)) {
@@ -118,7 +152,7 @@ Handler for mqtt commands sent to the module
 - log-oled: boolean
   Enable / Disable display of log messages on display
 */
-void MQTTtoSSD1306(char* topicOri, JsonObject& SSD1306data) { // json object decoding
+void XtoSSD1306(const char* topicOri, JsonObject& SSD1306data) { // json object decoding
   bool success = false;
   if (cmpToMainTopic(topicOri, subjectMQTTtoSSD1306set)) {
     Log.trace(F("MQTTtoSSD1306 json set" CR));
@@ -188,7 +222,7 @@ void MQTTtoSSD1306(char* topicOri, JsonObject& SSD1306data) { // json object dec
     if (success) {
       stateSSD1306Display();
     } else {
-      Log.error(F("[ SSD1306 ] MQTTtoSSD1306 Fail json" CR), SSD1306data);
+      Log.error(F("[ SSD1306 ] XtoSSD1306 Fail json" CR), SSD1306data);
     }
   }
 }
@@ -469,7 +503,7 @@ String stateSSD1306Display() {
   DISPLAYdata["log-oled"] = (bool)logToOLEDDisplay;
   DISPLAYdata["json-oled"] = (bool)jsonDisplay;
   DISPLAYdata["origin"] = subjectSSD1306toMQTT;
-  handleJsonEnqueue(DISPLAYdata);
+  enqueueJsonObject(DISPLAYdata);
 
   // apply
   Oled.display->setBrightness(round(displayBrightness * 2.55));

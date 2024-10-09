@@ -151,19 +151,19 @@
 
 #ifndef JSON_MSG_BUFFER
 #  if defined(ESP32)
-#    define JSON_MSG_BUFFER 816 // adjusted to minimum size covering largest Theengs device JSON properties (RuuviTag_RAWv2)
+#    define JSON_MSG_BUFFER 1024 // adjusted to minimum size covering largest home assistant discovery messages
 #  elif defined(ESP8266)
 #    define JSON_MSG_BUFFER 512 // Json message max buffer size, don't put 768 or higher it is causing unexpected behaviour on ESP8266, certificates handling with ESP8266 is not tested
 #  endif
 #  if MQTT_SECURE_DEFAULT
 #    define JSON_MSG_BUFFER_MAX 2048 // Json message buffer size increased to handle certificate changes through MQTT, used for the queue and the coming MQTT messages
 #  else
-#    define JSON_MSG_BUFFER_MAX JSON_MSG_BUFFER
+#    define JSON_MSG_BUFFER_MAX 1024 // Minimum size for the cover MQTT discovery message
 #  endif
 #endif
 
-#ifndef mqtt_max_topic_size
-#  define mqtt_max_packet_size JSON_MSG_BUFFER_MAX + mqtt_topic_max_size + 10 // maximum size of the MQTT packet
+#ifndef mqtt_max_payload_size
+#  define mqtt_max_payload_size JSON_MSG_BUFFER_MAX + mqtt_topic_max_size + 10 // maximum size of the MQTT payload
 #endif
 
 #ifndef MQTT_USER
@@ -212,6 +212,15 @@
 #  define AWS_IOT false
 #endif
 
+#ifndef MQTT_BROKER_MODE
+#  define MQTT_BROKER_MODE false
+#endif
+
+#if MQTT_BROKER_MODE
+// In MQTT broker mode the MQTT web config is not needed
+#  define WIFIMNG_HIDE_MQTT_CONFIG true
+#endif
+
 #define GITHUB_OTA_SERVER_CERT_HASH "d4d211b4553af9fac371f24c2268d59d2b0fec6b9aa0fdbbde068f078d7daf86" // SHA256 fingerprint of the certificate used by the OTA server
 
 #if AWS_IOT
@@ -248,10 +257,6 @@ const char* OTAserver_cert = "";
 #  define MQTT_SECURE_SIGNED_CLIENT 0 // If using a signed certificate for the broker and using client certificate/key set this to true or 1
 #endif
 
-#ifndef CNT_DEFAULT_INDEX
-#  define CNT_DEFAULT_INDEX 0 // Default set of connection parameters
-#endif
-
 #ifdef PRIVATE_CERTS
 #  include "certs/private_client_cert.h"
 #  include "certs/private_client_key.h"
@@ -264,6 +269,11 @@ const char* OTAserver_cert = "";
 
 #include <string>
 
+#ifndef CNT_DEFAULT_INDEX
+#  define CNT_DEFAULT_INDEX 0 // Default set of connection parameters
+#endif
+
+#if !MQTT_BROKER_MODE
 struct ss_cnt_parameters {
   std::string server_cert;
   std::string client_cert;
@@ -278,27 +288,15 @@ struct ss_cnt_parameters {
   bool validConnection;
 };
 
-// Index 0 is used for connection parameters provided in the build that can be overloaded by WiFi Manager/Onboarding/WebUI,MQTT
-#define CNT_DEFAULT_INDEX 0
-// Index 1 and more are used for connection parameters provided at runtime by MQTT
-#define cnt_parameters_array_size 3
+#  define cnt_parameters_array_size 3
 
 ss_cnt_parameters cnt_parameters_array[cnt_parameters_array_size] = {
     {ss_server_cert, ss_client_cert, ss_client_key, OTAserver_cert, MQTT_SERVER, MQTT_PORT, MQTT_USER, MQTT_PASS, MQTT_SECURE_DEFAULT, MQTT_CERT_VALIDATE_DEFAULT, false},
     {"", "", "", "", MQTT_SERVER, MQTT_PORT, MQTT_USER, MQTT_PASS, MQTT_SECURE_DEFAULT, MQTT_CERT_VALIDATE_DEFAULT, false},
     {"", "", "", "", MQTT_SERVER, MQTT_PORT, MQTT_USER, MQTT_PASS, MQTT_SECURE_DEFAULT, MQTT_CERT_VALIDATE_DEFAULT, false}};
+#endif
 
 #define MIN_CERT_LENGTH 200 // Minimum length of a certificate to be considered valid
-
-/**
- * Deep-sleep for the ESP8266.
- * Set the wake pin.
- */
-#if defined(DEEP_SLEEP_IN_US) && defined(ESP8266)
-#  ifndef ESP8266_DEEP_SLEEP_WAKE_PIN
-#    define ESP8266_DEEP_SLEEP_WAKE_PIN D0
-#  endif
-#endif
 
 /**
  * Ext wake for Deep-sleep for the ESP32.
@@ -310,16 +308,23 @@ ss_cnt_parameters cnt_parameters_array[cnt_parameters_array_size] = {
 #  endif
 #endif
 
-/*------------------DEEP SLEEP parameters ------------------*/
-//DEFAULT_LOW_POWER_MODE -1 to normal mode, low power mode can't be used on this build
-//DEFAULT_LOW_POWER_MODE 0 to normal mode (no power consumption optimisations)
-//DEFAULT_LOW_POWER_MODE 1 to activate deep sleep
-//DEFAULT_LOW_POWER_MODE 2 to activate deep sleep (LCD is turned OFF)
-#ifdef ESP32
-#  ifndef DEFAULT_LOW_POWER_MODE
-#    define DEFAULT_LOW_POWER_MODE -1
+#ifdef ESP32_EXT1_WAKE_PIN
+#  ifndef ESP32_EXT1_WAKE_PIN_STATE
+#    define ESP32_EXT1_WAKE_PIN_STATE 1
 #  endif
-int lowpowermode = DEFAULT_LOW_POWER_MODE;
+#endif
+
+#ifndef DEEP_SLEEP_IN_US
+#  define DEEP_SLEEP_IN_US 60000000 // 1 minute
+#endif
+
+/*------------------DEEP SLEEP parameters ------------------*/
+//DEFAULT_LOW_POWER_MODE DEACTIVATED low power mode can't be used on this build to prevent bricking devices that does not support low power mode
+//DEFAULT_LOW_POWER_MODE ALWAYS_ON normal mode (no power consumption optimisations)
+//DEFAULT_LOW_POWER_MODE INTERVAL to activate deep sleep with intervals and action wake up
+//DEFAULT_LOW_POWER_MODE ACTION to activate deep sleep with action wake up
+#ifndef DEFAULT_LOW_POWER_MODE
+#  define DEFAULT_LOW_POWER_MODE DEACTIVATED
 #endif
 
 /*-------------DEFINE THE MODULES YOU WANT BELOW----------------*/
@@ -362,7 +367,7 @@ int lowpowermode = DEFAULT_LOW_POWER_MODE;
 //#define ZactuatorPWM   "PWM"      //ESP8266, ESP32
 //#define ZsensorSHTC3 "SHTC3" //ESP8266, Arduino, ESP32,  Sonoff RF Bridge
 //#define ZactuatorSomfy "Somfy"    //ESP8266, Arduino, ESP32
-//#define ZgatewayRS232   "RS232"  //ESP8266, Arduino, ESP32
+//#define ZgatewaySERIAL   "SERIAL"  //ESP8266, Arduino, ESP32
 
 /*-------------DEFINE YOUR MQTT ADVANCED PARAMETERS BELOW----------------*/
 #ifndef will_Topic
@@ -426,209 +431,97 @@ int lowpowermode = DEFAULT_LOW_POWER_MODE;
 #  define ota_timeout_millis 30000
 #endif
 
-/*-------------ERRORS, INFOS, SEND RECEIVE Display through LED----------------*/
-#ifndef RGB_INDICATORS // Management of Errors, reception/emission and informations indicators with basic LED
-/*-------------DEFINE PINs FOR STATUS LEDs----------------*/
-#  ifndef LED_SEND_RECEIVE
-#    ifdef ESP8266
-//#      define LED_SEND_RECEIVE 40
-#    elif ESP32
-//#      define LED_SEND_RECEIVE 40
-#    endif
-#  endif
-#  ifndef LED_SEND_RECEIVE_ON
-#    define LED_SEND_RECEIVE_ON HIGH
-#  endif
-#  ifndef LED_ERROR
-#    ifdef ESP8266
-//#      define LED_ERROR 42
-#    elif ESP32
-//#      define LED_ERROR 42
-#    endif
-#  endif
-#  ifndef LED_ERROR_ON
-#    define LED_ERROR_ON HIGH
-#  endif
-#  ifndef LED_INFO
-#    ifdef ESP8266
-//#      define LED_INFO 44
-#    elif ESP32
-//#      define LED_INFO 44
-#    endif
-#  endif
-#  ifndef LED_INFO_ON
-#    define LED_INFO_ON HIGH
-#  endif
+// LED index depending on state, each state can have a different LED index or be grouped if there is a limited number of LEDs
+#ifndef LED_ERROR
+#  define LED_ERROR 0
+#endif
+#ifndef LED_PROCESSING
+#  define LED_PROCESSING 0
+#endif
+#ifndef LED_BROKER
+#  define LED_BROKER 0
+#endif
+#ifndef LED_NETWORK
+#  define LED_NETWORK 0
+#endif
 
-#  ifdef LED_ERROR
-#    define SetupIndicatorError() \
-      pinMode(LED_ERROR, OUTPUT); \
-      ErrorIndicatorOFF();
-#    define ErrorIndicatorON()  digitalWrite(LED_ERROR, LED_ERROR_ON)
-#    define ErrorIndicatorOFF() digitalWrite(LED_ERROR, !LED_ERROR_ON)
-#  else
-#    define SetupIndicatorError()
-#    define ErrorIndicatorON()
-#    define ErrorIndicatorOFF()
-#  endif
-#  ifdef LED_SEND_RECEIVE
-#    define SetupIndicatorSendReceive()  \
-      pinMode(LED_SEND_RECEIVE, OUTPUT); \
-      SendReceiveIndicatorOFF();
-#    define SendReceiveIndicatorON()  digitalWrite(LED_SEND_RECEIVE, LED_SEND_RECEIVE_ON)
-#    define SendReceiveIndicatorOFF() digitalWrite(LED_SEND_RECEIVE, !LED_SEND_RECEIVE_ON)
-#  else
-#    define SetupIndicatorSendReceive()
-#    define SendReceiveIndicatorON()
-#    define SendReceiveIndicatorOFF()
-#  endif
-#  ifdef LED_INFO
-#    define SetupIndicatorInfo() \
-      pinMode(LED_INFO, OUTPUT); \
-      InfoIndicatorOFF();
-#    define InfoIndicatorON()  digitalWrite(LED_INFO, LED_INFO_ON)
-#    define InfoIndicatorOFF() digitalWrite(LED_INFO, !LED_INFO_ON)
-#  else
-#    define SetupIndicatorInfo()
-#    define InfoIndicatorON()
-#    define InfoIndicatorOFF()
-#  endif
-#  define CriticalIndicatorON() // Not used
-#  define PowerIndicatorON()    // Not used
-#  define PowerIndicatorOFF()   // Not used
-#  define SetupIndicators()     // Not used
-#else // Management of Errors, reception/emission and informations indicators with RGB LED
-#  include <Adafruit_NeoPixel.h>
-#  ifndef ANEOPIX_IND_TYPE // needs library constants
-#    define ANEOPIX_IND_TYPE NEO_GRB + NEO_KHZ800 // ws2812 and alike
-#  endif
-Adafruit_NeoPixel leds(ANEOPIX_IND_NUM_LEDS, ANEOPIX_IND_DATA_GPIO, ANEOPIX_IND_TYPE);
-#  ifdef ANEOPIX_IND_DATA_GPIO2 // Only used for Critical Indicator
-// assume the same LED type
-Adafruit_NeoPixel leds2(ANEOPIX_IND_NUM_LEDS, ANEOPIX_IND_DATA_GPIO2, ANEOPIX_IND_TYPE);
-#  endif
+// LED Strip index
+#ifndef STRIP_ERROR
+#  define STRIP_ERROR 0
+#endif
+#ifndef STRIP_PROCESSING
+#  define STRIP_PROCESSING 0
+#endif
+#ifndef STRIP_BROKER
+#  define STRIP_BROKER 0
+#endif
+#ifndef STRIP_NETWORK
+#  define STRIP_NETWORK 0
+#endif
+#ifndef STRIP_POWER
+#  define STRIP_POWER 0
+#endif
 
-#  ifndef RGB_LED_POWER
-#    define RGB_LED_POWER -1 // If the RGB Led is linked to GPIO pin for power define it here
+// Single standard LED pin
+#ifndef LED_PIN
+#  ifdef LED_BUILTIN
+#    define LED_PIN LED_BUILTIN
 #  endif
-#  ifndef ANEOPIX_BRIGHTNESS
-#    define ANEOPIX_BRIGHTNESS 20 // Set Default maximum RGB brightness to approx 10% (0-255 scale)
+#endif
+#ifndef LED_PIN_ON
+#  define LED_PIN_ON HIGH
+#endif
+#ifndef LED_ACTUATOR_ONOFF
+#  ifdef LED_BUILTIN
+#    define LED_ACTUATOR_ONOFF LED_BUILTIN
 #  endif
-#  ifndef DEFAULT_ADJ_BRIGHTNESS
-#    define DEFAULT_ADJ_BRIGHTNESS 255 // Set Default RGB adjustable brightness
-#  endif
-#  ifndef ANEOPIX_COLOR_SCHEME // allow for different color combinations
-#    define ANEOPIX_COLOR_SCHEME 0
-#  endif
-// Allow to set LED used (for example thingpulse gateway has 4 we use them independently)
-#  ifndef ANEOPIX_INFO_LED
-#    define ANEOPIX_INFO_LED 0 // First Led
-#  endif
-#  ifndef ANEOPIX_SEND_RECEIVE_LED
-#    define ANEOPIX_SEND_RECEIVE_LED 0 // First Led
-#  endif
-#  ifndef ANEOPIX_ERROR_LED
-#    define ANEOPIX_ERROR_LED 0 // First Led
-#  endif
-#  ifndef ANEOPIX_CRITICAL_LED
-#    define ANEOPIX_CRITICAL_LED 0 // First Led
-#  endif
-// compile time calculation of color values
-#  define ANEOPIX_RED     ((0xFF * ANEOPIX_BRIGHTNESS) >> 8) << 16
-#  define ANEOPIX_RED_DIM ((0x3F * ANEOPIX_BRIGHTNESS) >> 8) << 16 // dimmed /4
-#  define ANEOPIX_ORANGE  (((0xFF * ANEOPIX_BRIGHTNESS) >> 8) << 16) | \
-                             (((0xA5 * ANEOPIX_BRIGHTNESS) >> 8) << 8)
-#  define ANEOPIX_GOLD (((0xFF * ANEOPIX_BRIGHTNESS) >> 8) << 16) | \
-                           (((0xD7 * ANEOPIX_BRIGHTNESS) >> 8) << 8)
-#  define ANEOPIX_GREEN     ((0xFF * ANEOPIX_BRIGHTNESS) >> 8) << 8
-#  define ANEOPIX_GREEN_DIM ((0x3F * ANEOPIX_BRIGHTNESS) >> 8) << 8 // dimmed /4
-#  define ANEOPIX_AQUA      (((0xFF * ANEOPIX_BRIGHTNESS) >> 8) << 8) | \
-                           (0xFF * ANEOPIX_BRIGHTNESS) >> 8
-#  define ANEOPIX_BLUE     (0xFF * ANEOPIX_BRIGHTNESS) >> 8
-#  define ANEOPIX_BLUE_DIM (0x3F * ANEOPIX_BRIGHTNESS) >> 8 // dimmed /4
-#  define ANEOPIX_BLACK    0
+#endif
 
-#  if ANEOPIX_COLOR_SCHEME == 0
-// original color combination remains default
-#    define ANEOPIX_INFO        ANEOPIX_GREEN
-#    define ANEOPIX_ERROR       ANEOPIX_ORANGE
-#    define ANEOPIX_SENDRECEIVE ANEOPIX_BLUE
-#    define ANEOPIX_CRITICAL    ANEOPIX_RED // second led
-#    define ANEOPIX_POWER       ANEOPIX_GREEN // second led
-#    define ANEOPIX_BOOT        ANEOPIX_BLACK // unused
-#    define ANEOPIX_OFF         ANEOPIX_BLACK
-// color combinations tested for good visibility of onboard leds
-#  elif ANEOPIX_COLOR_SCHEME == 1
-#    define ANEOPIX_INFO        ANEOPIX_GREEN_DIM // dimmed green info background
-#    define ANEOPIX_ERROR       ANEOPIX_RED_DIM
-#    define ANEOPIX_SENDRECEIVE ANEOPIX_GOLD // bright gold  = sending
-#    define ANEOPIX_CRITICAL    ANEOPIX_BLACK // unused
-#    define ANEOPIX_POWER       ANEOPIX_BLACK // unused
-#    define ANEOPIX_BOOT        ANEOPIX_AQUA
-#    define ANEOPIX_OFF         ANEOPIX_BLACK
-#  else
-#    define ANEOPIX_INFO        ANEOPIX_BLUE_DIM // dimmed blue info background
-#    define ANEOPIX_ERROR       ANEOPIX_RED_DIM
-#    define ANEOPIX_SENDRECEIVE ANEOPIX_GOLD // bright gold  = sending
-#    define ANEOPIX_CRITICAL    ANEOPIX_BLACK // unused
-#    define ANEOPIX_POWER       ANEOPIX_BLACK // unused
-#    define ANEOPIX_BOOT        ANEOPIX_AQUA
-#    define ANEOPIX_OFF         ANEOPIX_BLACK
-#  endif
-#  ifndef ANEOPIX_IND_DATA_GPIO2
-// during boot the RGB LED is on to signal also reboots
-#    define SetupIndicators()                             \
-      pinMode(RGB_LED_POWER, OUTPUT);                     \
-      digitalWrite(RGB_LED_POWER, HIGH);                  \
-      leds.begin();                                       \
-      leds.setPixelColor(ANEOPIX_INFO_LED, ANEOPIX_BOOT); \
-      leds.show();
-#  else
-#    define SetupIndicators()            \
-      pinMode(RGB_LED_POWER, OUTPUT);    \
-      digitalWrite(RGB_LED_POWER, HIGH); \
-      leds.begin();                      \
-      leds2.begin();
-#  endif
-#  define ErrorIndicatorON()                              \
-    leds.setPixelColor(ANEOPIX_ERROR_LED, ANEOPIX_ERROR); \
-    leds.setBrightness(SYSConfig.rgbbrightness);          \
-    leds.show();
-#  define ErrorIndicatorOFF()                           \
-    leds.setPixelColor(ANEOPIX_ERROR_LED, ANEOPIX_OFF); \
-    leds.show();
-#  define SendReceiveIndicatorON()                                     \
-    leds.setPixelColor(ANEOPIX_SEND_RECEIVE_LED, ANEOPIX_SENDRECEIVE); \
-    leds.setBrightness(SYSConfig.rgbbrightness);                       \
-    leds.show();
-#  define SendReceiveIndicatorOFF()                            \
-    leds.setPixelColor(ANEOPIX_SEND_RECEIVE_LED, ANEOPIX_OFF); \
-    leds.show();
-#  define InfoIndicatorON()                             \
-    leds.setPixelColor(ANEOPIX_INFO_LED, ANEOPIX_INFO); \
-    leds.setBrightness(SYSConfig.rgbbrightness);        \
-    leds.show();
-#  define InfoIndicatorOFF()                           \
-    leds.setPixelColor(ANEOPIX_INFO_LED, ANEOPIX_OFF); \
-    leds.show();
-#  ifdef ANEOPIX_IND_DATA_GPIO2 // Used for relay power indicator
-// For the critical ON indicator there is no method to turn it off, the only way is to unplug the device
-// This enable to have persistence of the indicator to inform the user
-#    define CriticalIndicatorON()                              \
-      leds2.setPixelColor(ANEOPIX_INFO_LED, ANEOPIX_CRITICAL); \
-      leds2.setBrightness(255);                                \
-      leds2.show();
-#    define PowerIndicatorON()                             \
-      leds2.setPixelColor(ANEOPIX_INFO_LED, ANEOPIX_INFO); \
-      leds2.setBrightness(SYSConfig.rgbbrightness);        \
-      leds2.show();
-#    define PowerIndicatorOFF()                           \
-      leds2.setPixelColor(ANEOPIX_INFO_LED, ANEOPIX_OFF); \
-      leds2.show();
-#  endif
-#  define SetupIndicatorInfo()
-#  define SetupIndicatorSendReceive()
-#  define SetupIndicatorError()
+#ifndef DEFAULT_ADJ_BRIGHTNESS
+#  define DEFAULT_ADJ_BRIGHTNESS 255 // Set Default RGB adjustable brightness
+#endif
+
+#ifndef LED_POWER_COLOR
+#  define LED_POWER_COLOR 0x00FF00 // Green
+#endif
+#ifndef LED_PROCESSING_COLOR
+#  define LED_PROCESSING_COLOR 0x0000FF // Blue
+#endif
+#ifndef LED_WAITING_ONBOARD_COLOR
+#  define LED_WAITING_ONBOARD_COLOR 0xFFA500 // Orange
+#endif
+#ifndef LED_ONBOARD_COLOR
+#  define LED_ONBOARD_COLOR 0xFFFF00 // Yellow
+#endif
+#ifndef LED_NETWORK_OK_COLOR
+#  define LED_NETWORK_OK_COLOR 0x00FF00 // Green
+#endif
+#ifndef LED_NETWORK_ERROR_COLOR
+#  define LED_NETWORK_ERROR_COLOR 0xFFA500 // Orange
+#endif
+#ifndef LED_BROKER_OK_COLOR
+#  define LED_BROKER_OK_COLOR 0x00FF00 // Green
+#endif
+#ifndef LED_BROKER_ERROR_COLOR
+#  define LED_BROKER_ERROR_COLOR 0xFFA500 // Orange
+#endif
+#ifndef LED_OFFLINE_COLOR
+#  define LED_OFFLINE_COLOR 0x0000FF // Blue
+#endif
+#ifndef LED_OTA_LOCAL_COLOR
+#  define LED_OTA_LOCAL_COLOR 0xFF00FF // Magenta
+#endif
+#ifndef LED_OTA_REMOTE_COLOR
+#  define LED_OTA_REMOTE_COLOR 0x8000FF // Purple
+#endif
+#ifndef LED_ERROR_COLOR
+#  define LED_ERROR_COLOR 0xFF0000 // Red
+#endif
+#ifndef LED_ACTUATOR_ONOFF_COLOR
+#  define LED_ACTUATOR_ONOFF_COLOR 0x00FF00 // Green
+#endif
+#ifndef LED_COLOR_BLACK
+#  define LED_COLOR_BLACK 0x000000
 #endif
 
 #ifdef ESP8266
@@ -653,9 +546,15 @@ Adafruit_NeoPixel leds2(ANEOPIX_IND_NUM_LEDS, ANEOPIX_IND_DATA_GPIO2, ANEOPIX_IN
 #endif
 /*--------------MQTT general topics-----------------*/
 // global MQTT subject listened by the gateway to execute commands (send RF, IR or others)
-#define subjectMQTTtoX     "/commands/#"
-#define subjectMultiGTWKey "toMQTT"
-#define subjectGTWSendKey  "MQTTto"
+#ifndef subjectMQTTtoX
+#  define subjectMQTTtoX "/commands/#"
+#endif
+#ifndef subjectMultiGTWKey
+#  define subjectMultiGTWKey "toMQTT"
+#endif
+#ifndef subjectGTWSendKey
+#  define subjectGTWSendKey "MQTTto"
+#endif
 
 // key used for launching commands to the gateway
 #define restartCmd "restart"
@@ -673,16 +572,28 @@ Adafruit_NeoPixel leds2(ANEOPIX_IND_NUM_LEDS, ANEOPIX_IND_DATA_GPIO2, ANEOPIX_IN
 #  endif
 #endif
 
-#define TimeBetweenReadingSYS        120 // time between (s) system readings (like memory)
+#ifndef TimeBetweenReadingSYS
+#  define TimeBetweenReadingSYS 120 // time between (s) system readings (like memory)
+#endif
 #define TimeBetweenCheckingSYS       3600 // time between (s) system checkings (like updates)
 #define TimeLedON                    1 // time LED are ON
 #define InitialMQTTConnectionTimeout 10 // time estimated (s) before the board is connected to MQTT
-#define subjectSYStoMQTT             "/SYStoMQTT" // system parameters
-#define subjectLOGtoMQTT             "/LOGtoMQTT" // log informations
-#define subjectRLStoMQTT             "/RLStoMQTT" // latest release information
-#define subjectMQTTtoSYSset          "/commands/MQTTtoSYS/config"
-#define subjectMQTTtoSYSupdate       "/commands/MQTTtoSYS/firmware_update"
-#define TimeToResetAtStart           5000 // Time we allow the user at start for the reset command by button press
+#ifndef subjectSYStoMQTT
+#  define subjectSYStoMQTT "/SYStoMQTT" // system parameters
+#endif
+#ifndef subjectLOGtoMQTT
+#  define subjectLOGtoMQTT "/LOGtoMQTT" // log informations
+#endif
+#ifndef subjectRLStoMQTT
+#  define subjectRLStoMQTT "/RLStoMQTT" // latest release information
+#endif
+#ifndef subjectMQTTtoSYSset
+#  define subjectMQTTtoSYSset "/commands/MQTTtoSYS/config"
+#endif
+#ifndef subjectMQTTtoSYSupdate
+#  define subjectMQTTtoSYSupdate "/commands/MQTTtoSYS/firmware_update"
+#endif
+#define TimeToResetAtStart 5000 // Time we allow the user at start for the reset command by button press
 /*-------------------DEFINE LOG LEVEL----------------------*/
 #ifndef LOG_LEVEL
 #  define LOG_LEVEL LOG_LEVEL_NOTICE
@@ -706,7 +617,6 @@ Adafruit_NeoPixel leds2(ANEOPIX_IND_NUM_LEDS, ANEOPIX_IND_DATA_GPIO2, ANEOPIX_IN
 
 /*-----------PLACEHOLDERS FOR OLED/LCD DISPLAY--------------*/
 // The real definitions are in config_M5.h / config_SSD1306.h
-#define pubOled(...)        // display the published message onto the OLED display
 #define displayPrint(...)   // only print if not in low power mode
 #define lpDisplayPrint(...) // print in low power mode
 
@@ -719,10 +629,8 @@ void connectMQTT();
 
 unsigned long uptime();
 bool cmpToMainTopic(const char*, const char*);
-void pub(const char*, const char*, bool);
-// void pub(const char*, JsonObject&);
-void pub(const char*, const char*);
-// void pub_custom_topic(const char*, JsonObject&, boolean);
+bool pub(const char*, const char*, bool);
+bool pub(const char*, const char*);
 
 #if defined(ESP32)
 #  include <Preferences.h>
@@ -745,31 +653,46 @@ unsigned long lastDiscovery = 0; // Time of the last discovery to trigger automa
 #define isBlack(device)       device->isBlkL
 #define isDiscovered(device)  device->isDisc
 
+enum PowerMode { DEACTIVATED = -1,
+                 ALWAYS_ON,
+                 INTERVAL,
+                 ACTION };
+
 /*--------------------Minimum freeHeap--------------------*/
 // Below this parameter we trigger a restart, this avoid stuck boards like seen in https://github.com/1technophile/OpenMQTTGateway/issues/1693
 #define MinimumMemory 40000
 
 /*----------------CONFIGURABLE PARAMETERS-----------------*/
 struct SYSConfig_s {
-  bool XtoMQTT; // if true the gateway will publish the received data on the MQTT broker
+  bool mqtt; // if true the gateway will publish the received data on the MQTT broker
+  bool serial; // if true the gateway will publish the received data on the SERIAL
+  bool blufi; // if true the gateway will be accesible with blufi
+  bool offline;
   bool discovery; // HA discovery convention
   bool ohdiscovery; // OH discovery specificities
-#ifdef RGB_INDICATORS
+#ifdef LED_ADDRESSABLE
   int rgbbrightness; // brightness of the RGB LED
 #endif
+  enum PowerMode powerMode;
 };
 
-#ifndef DEFAULT_XtoMQTT
-#  define DEFAULT_XtoMQTT true
+#ifndef DEFAULT_MQTT
+#  define DEFAULT_MQTT true
+#endif
+#ifndef DEFAULT_SERIAL
+#  define DEFAULT_SERIAL false
+#endif
+#ifndef DEFAULT_BLUFI
+#  define DEFAULT_BLUFI true
+#endif
+#ifndef DEFAULT_OFFLINE
+#  define DEFAULT_OFFLINE false
 #endif
 
 #if defined(ZgatewayRF) || defined(ZgatewayIR) || defined(ZgatewaySRFB) || defined(ZgatewayWeatherStation) || defined(ZgatewayRTL_433)
 bool isAduplicateSignal(uint64_t);
 void storeSignalValue(uint64_t);
 #endif
-
-// Origin topics
-#define subjectBTtoMQTT "/BTtoMQTT"
 
 #define convertTemp_CtoF(c) ((c * 1.8) + 32)
 #define convertTemp_FtoC(f) ((f - 32) * 5 / 9)

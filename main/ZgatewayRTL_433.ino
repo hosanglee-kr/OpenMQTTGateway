@@ -125,7 +125,12 @@ void launchRTL_433Discovery(bool overrideDiscovery) {
     if (overrideDiscovery || !isDiscovered(pdevice)) {
       size_t numRows = sizeof(parameters) / sizeof(parameters[0]);
       for (int i = 0; i < numRows; i++) {
-        if (strstr(pdevice->uniqueId, parameters[i][0]) != 0) {
+        char deviceKeyParameter[25];
+        memcpy(deviceKeyParameter, &pdevice->uniqueId[strlen(pdevice->uniqueId) - strlen(parameters[i][0])], strlen(parameters[i][0]));
+        deviceKeyParameter[strlen(parameters[i][0])] = '\0';
+        Log.trace(F("deviceKeyParameter: %s" CR), deviceKeyParameter);
+
+        if (strcmp(deviceKeyParameter, parameters[i][0]) == 0) {
           // Remove the key from the unique id to extract the device id
           String idWoKey = pdevice->uniqueId;
           idWoKey.remove(idWoKey.length() - (strlen(parameters[i][0]) + 1));
@@ -276,7 +281,6 @@ void rtl_433_Callback(char* message) {
   String topic = subjectRTL_433toMQTT;
   String model = RFrtl_433_ESPdata["model"];
   String type = RFrtl_433_ESPdata["type"];
-  Log.notice(F("type: %s" CR), type.c_str());
   String uniqueid;
 
   const char naming_keys[5][8] = {"type", "model", "subtype", "channel", "id"}; // from rtl_433_mqtt_hass.py
@@ -303,11 +307,9 @@ void rtl_433_Callback(char* message) {
     if (SYSConfig.discovery)
       storeRTL_433Discovery(RFrtl_433_ESPdata, (char*)model.c_str(), (char*)type.c_str(), (char*)uniqueid.c_str());
 #  endif
-    //RFrtl_433_ESPdata["origin"] = (char*)topic.c_str();
-    //handleJsonEnqueue(RFrtl_433_ESPdata);
-    pub(topic.c_str(), RFrtl_433_ESPdata);
+    RFrtl_433_ESPdata["origin"] = (char*)topic.c_str();
+    enqueueJsonObject(RFrtl_433_ESPdata);
     storeSignalValue(MQTTvalue);
-    pubOled((char*)topic.c_str(), RFrtl_433_ESPdata);
   }
 #  ifdef MEMORY_DEBUG
   Log.trace(F("Post rtl_433_Callback: %d" CR), ESP.getFreeHeap());

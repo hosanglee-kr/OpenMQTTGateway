@@ -105,17 +105,33 @@
 #define subjectMQTTtoSSD1306set "/commands/MQTTtoSSD1306/config"
 #define subjectSSD1306toMQTT    "/SSD1306toMQTT"
 
+/*-------------------Display Blanking via Touch----------------------*/
+
+#ifdef DISPLAY_BLANKING
+#  ifndef DISPLAY_BLANKING_TOUCH_GPIO
+#    define DISPLAY_BLANKING_TOUCH_GPIO 2 // GPIO pin for touch sensor
+#  endif
+#  ifndef DISPLAY_BLANKING_START
+#    define DISPLAY_BLANKING_START 30 // 30 seconds after last touch
+#  endif
+#  ifndef DISPLAY_BLANKING_THRESHOLD
+#    define DISPLAY_BLANKING_THRESHOLD 10
+#  endif
+#  define TOUCH_READINGS  100 // Number of readings to average
+#  define TOUCH_THRESHOLD 0.2 // 20% change in reading
+#endif
+
 /*-------------------EXTERNAL FUNCTIONS----------------------*/
 
 extern void setupSSD1306();
 extern void loopSSD1306();
-extern void MQTTtoSSD1306(char*, JsonObject&);
+extern void XtoSSD1306(const char*, JsonObject&);
 extern String stateSSD1306Display();
 
 // Simple construct for displaying message in lcd and oled displays
 
 #define displayPrint(...) \
-  if (lowpowermode < 2) ssd1306Print(__VA_ARGS__) // only print if not in low power mode
+  if (SYSConfig.powerMode < 1) ssd1306Print(__VA_ARGS__) // only print if not in low power mode
 #define lpDisplayPrint(...) ssd1306Print(__VA_ARGS__) // print in low power mode
 
 void ssd1306Print(char*, char*, char*);

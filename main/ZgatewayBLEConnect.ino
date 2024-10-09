@@ -120,7 +120,7 @@ bool zBLEConnect::processActions(std::vector<BLEAction>& actions) {
         BLEdata["success"] = result;
         if (result || it.ttl <= 1) {
           buildTopicFromId(BLEdata, subjectBTtoMQTT);
-          handleJsonEnqueue(BLEdata, QueueSemaphoreTimeOutTask);
+          enqueueJsonObject(BLEdata, QueueSemaphoreTimeOutTask);
         }
       }
     }
@@ -160,7 +160,7 @@ void LYWSD03MMC_connect::notifyCB(NimBLERemoteCharacteristic* pChar, uint8_t* pD
       BLEdata["volt"] = (float)(((pData[4] * 256) + pData[3]) / 1000.0);
       BLEdata["batt"] = (float)(((((pData[4] * 256) + pData[3]) / 1000.0) - 2.1) * 100);
       buildTopicFromId(BLEdata, subjectBTtoMQTT);
-      handleJsonEnqueue(BLEdata, QueueSemaphoreTimeOutTask);
+      enqueueJsonObject(BLEdata, QueueSemaphoreTimeOutTask);
     } else {
       Log.notice(F("Invalid notification data" CR));
       return;
@@ -225,7 +225,7 @@ void DT24_connect::notifyCB(NimBLERemoteCharacteristic* pChar, uint8_t* pData, s
       BLEdata["tempc"] = (float)(m_data[24] * 256) + m_data[25];
       BLEdata["tempf"] = (float)(convertTemp_CtoF((m_data[24] * 256) + m_data[25]));
       buildTopicFromId(BLEdata, subjectBTtoMQTT);
-      handleJsonEnqueue(BLEdata, QueueSemaphoreTimeOutTask);
+      enqueueJsonObject(BLEdata, QueueSemaphoreTimeOutTask);
     } else {
       Log.notice(F("Invalid notification data" CR));
       return;
@@ -304,7 +304,7 @@ void BM2_connect::notifyCB(NimBLERemoteCharacteristic* pChar, uint8_t* pData, si
       // to avoid the BM2 device tracker going offline because of the voltage MQTT message without an RSSI value
       BLEdata["rssi"] = -60;
       buildTopicFromId(BLEdata, subjectBTtoMQTT);
-      handleJsonEnqueue(BLEdata, QueueSemaphoreTimeOutTask);
+      enqueueJsonObject(BLEdata, QueueSemaphoreTimeOutTask);
     } else {
       Log.notice(F("Invalid notification data" CR));
       return;
@@ -362,7 +362,7 @@ void HHCCJCY01HHCC_connect::publishData() {
       BLEdata["id"] = (char*)mac_address.c_str();
       BLEdata["batt"] = (int)batteryValue;
       buildTopicFromId(BLEdata, subjectBTtoMQTT);
-      handleJsonEnqueue(BLEdata, QueueSemaphoreTimeOutTask);
+      enqueueJsonObject(BLEdata, QueueSemaphoreTimeOutTask);
     } else {
       Log.notice(F("Failed getting characteristic" CR));
     }
@@ -394,7 +394,7 @@ void XMWSDJ04MMC_connect::notifyCB(NimBLERemoteCharacteristic* pChar, uint8_t* p
       BLEdata["volt"] = (float)((pData[4] | (pData[5] << 8)) / 1000.0);
       BLEdata["batt"] = (float)((((pData[4] | (pData[5] << 8)) / 1000.0) - 2.1) * 100);
       buildTopicFromId(BLEdata, subjectBTtoMQTT);
-      handleJsonEnqueue(BLEdata, QueueSemaphoreTimeOutTask);
+      enqueueJsonObject(BLEdata, QueueSemaphoreTimeOutTask);
     } else {
       Log.notice(F("Invalid notification data" CR));
       return;
@@ -453,6 +453,9 @@ bool SBS1_connect::processActions(std::vector<BLEAction>& actions) {
   NimBLEUUID notifyCharUUID("cba20003-224d-11e6-9fb8-0002a5d5c51b");
   static byte ON[] = {0x57, 0x01, 0x01};
   static byte OFF[] = {0x57, 0x01, 0x02};
+  static byte PRESS[] = {0x57, 0x01, 0x00};
+  static byte DOWN[] = {0x57, 0x01, 0x03};
+  static byte UP[] = {0x57, 0x01, 0x04};
 
   bool result = false;
   if (actions.size() > 0) {
@@ -470,8 +473,14 @@ bool SBS1_connect::processActions(std::vector<BLEAction>& actions) {
                                      true)) {
             if (it.value == "on") {
               result = pChar->writeValue(ON, 3, false);
-            } else {
+            } else if (it.value == "off") {
               result = pChar->writeValue(OFF, 3, false);
+            } else if (it.value == "press") {
+              result = pChar->writeValue(PRESS, 3, false);
+            } else if (it.value == "down") {
+              result = pChar->writeValue(DOWN, 3, false);
+            } else if (it.value == "up") {
+              result = pChar->writeValue(UP, 3, false);
             }
 
             if (result) {
@@ -489,9 +498,207 @@ bool SBS1_connect::processActions(std::vector<BLEAction>& actions) {
           StaticJsonDocument<JSON_MSG_BUFFER> BLEdataBuffer;
           JsonObject BLEdata = BLEdataBuffer.to<JsonObject>();
           BLEdata["id"] = it.addr;
-          BLEdata["state"] = result ? it.value : it.value == "on" ? "off" : "on";
+          BLEdata["state"] = it.value;
           buildTopicFromId(BLEdata, subjectBTtoMQTT);
-          handleJsonEnqueue(BLEdata, QueueSemaphoreTimeOutTask);
+          enqueueJsonObject(BLEdata, QueueSemaphoreTimeOutTask);
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+/*-----------------------SBBT HANDLING-----------------------*/
+void SBBT_connect::notifyCB(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
+  if (m_taskHandle == nullptr) {
+    return; // unexpected notification
+  }
+  if (!BTProcessLock) {
+    Log.trace(F("Callback from %s characteristic" CR), pChar->getUUID().toString().c_str());
+
+    if (length) {
+      m_notifyVal = *pData;
+    } else {
+      Log.notice(F("Invalid notification data" CR));
+      return;
+    }
+  } else {
+    Log.trace(F("Callback process canceled by BTProcessLock" CR));
+  }
+
+  xTaskNotifyGive(m_taskHandle);
+}
+
+bool SBBT_connect::processActions(std::vector<BLEAction>& actions) {
+  NimBLEUUID serviceUUID("cba20d00-224d-11e6-9fb8-0002a5d5c51b");
+  NimBLEUUID charUUID("cba20002-224d-11e6-9fb8-0002a5d5c51b");
+  NimBLEUUID notifyCharUUID("cba20003-224d-11e6-9fb8-0002a5d5c51b");
+  static byte OPEN[] = {0x57, 0x0f, 0x45, 0x01, 0x01, 0x01, 0x32};
+  static byte CLOSE_DOWN[] = {0x57, 0x0f, 0x45, 0x01, 0x01, 0x01, 0x00};
+  static byte CLOSE_UP[] = {0x57, 0x0f, 0x45, 0x01, 0x01, 0x01, 0x64};
+  static byte MOVE[] = {0x57, 0x0f, 0x45, 0x01, 0x01, 0x01, 0x00};
+  static byte STOP[] = {0x57, 0x0f, 0x45, 0x01, 0x00, 0x01};
+
+  bool result = false;
+  if (actions.size() > 0) {
+    for (auto& it : actions) {
+      if (NimBLEAddress(it.addr) == m_pClient->getPeerAddress()) {
+        NimBLERemoteCharacteristic* pChar = getCharacteristic(serviceUUID, charUUID);
+        NimBLERemoteCharacteristic* pNotifyChar = getCharacteristic(serviceUUID, notifyCharUUID);
+        int value = -99;
+        if (it.value_type == BLE_VAL_INT) {
+          value = std::stoi(it.value);
+        }
+        if (it.write && pChar && pNotifyChar) {
+          Log.trace(F("processing Switchbot %s" CR), it.value.c_str());
+          if (pNotifyChar->subscribe(true,
+                                     std::bind(&SBBT_connect::notifyCB,
+                                               this, std::placeholders::_1, std::placeholders::_2,
+                                               std::placeholders::_3, std::placeholders::_4),
+                                     true)) {
+            if (it.value == "open" && it.value_type == BLE_VAL_STRING) {
+              result = pChar->writeValue(OPEN, 7, false);
+              value = 50;
+            } else if (it.value == "close_down" && it.value_type == BLE_VAL_STRING) {
+              result = pChar->writeValue(CLOSE_DOWN, 7, false);
+              value = 0;
+            } else if (it.value == "close_up" && it.value_type == BLE_VAL_STRING) {
+              result = pChar->writeValue(CLOSE_UP, 7, false);
+              value = 100;
+            } else if (it.value == "stop" && it.value_type == BLE_VAL_STRING) {
+              result = pChar->writeValue(STOP, 6, false);
+            } else if (it.value_type == BLE_VAL_INT) {
+              if (value >= 0 && value <= 100) {
+                byte posByte = (byte)value;
+                MOVE[6] = posByte;
+                result = pChar->writeValue(MOVE, 7, false);
+              }
+            } else if (value == -1 && it.value_type == BLE_VAL_INT) {
+              result = pChar->writeValue(STOP, 6, false);
+            }
+
+            if (result) {
+              m_taskHandle = xTaskGetCurrentTaskHandle();
+              if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(BLE_CNCT_TIMEOUT)) == pdFALSE) {
+                m_taskHandle = nullptr;
+              }
+              result = m_notifyVal == 0x01;
+            }
+          }
+        }
+
+        it.complete = result;
+        if (result || it.ttl <= 1) {
+          StaticJsonDocument<JSON_MSG_BUFFER> BLEdataBuffer;
+          JsonObject BLEdata = BLEdataBuffer.to<JsonObject>();
+          BLEdata["id"] = it.addr;
+          if (value != -99 || value != -1)
+            BLEdata["tilt"] = value;
+          if (value == 50) {
+            BLEdata["open"] = 100;
+            BLEdata["direction"] = "-";
+          } else if (value < 50 && value >= 0) {
+            BLEdata["open"] = value * 2;
+            BLEdata["direction"] = "down";
+          } else if (value > 50 && value <= 100) {
+            BLEdata["open"] = (100 - value) * 2;
+            BLEdata["direction"] = "up";
+          }
+          buildTopicFromId(BLEdata, subjectBTtoMQTT);
+          enqueueJsonObject(BLEdata, QueueSemaphoreTimeOutTask);
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+/*-----------------------SBCU HANDLING-----------------------*/
+void SBCU_connect::notifyCB(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
+  if (m_taskHandle == nullptr) {
+    return; // unexpected notification
+  }
+  if (!BTProcessLock) {
+    Log.trace(F("Callback from %s characteristic" CR), pChar->getUUID().toString().c_str());
+
+    if (length) {
+      m_notifyVal = *pData;
+    } else {
+      Log.notice(F("Invalid notification data" CR));
+      return;
+    }
+  } else {
+    Log.trace(F("Callback process canceled by BTProcessLock" CR));
+  }
+
+  xTaskNotifyGive(m_taskHandle);
+}
+
+bool SBCU_connect::processActions(std::vector<BLEAction>& actions) {
+  NimBLEUUID serviceUUID("cba20d00-224d-11e6-9fb8-0002a5d5c51b");
+  NimBLEUUID charUUID("cba20002-224d-11e6-9fb8-0002a5d5c51b");
+  NimBLEUUID notifyCharUUID("cba20003-224d-11e6-9fb8-0002a5d5c51b");
+  static byte CLOSE[] = {0x57, 0x0f, 0x45, 0x01, 0x01, 0x01, 0x64};
+  static byte OPEN[] = {0x57, 0x0f, 0x45, 0x01, 0x01, 0x01, 0x00};
+  static byte MOVE[] = {0x57, 0x0f, 0x45, 0x01, 0x01, 0x01, 0x00};
+  static byte STOP[] = {0x57, 0x0f, 0x45, 0x01, 0x00, 0x01};
+
+  bool result = false;
+  if (actions.size() > 0) {
+    for (auto& it : actions) {
+      if (NimBLEAddress(it.addr) == m_pClient->getPeerAddress()) {
+        NimBLERemoteCharacteristic* pChar = getCharacteristic(serviceUUID, charUUID);
+        NimBLERemoteCharacteristic* pNotifyChar = getCharacteristic(serviceUUID, notifyCharUUID);
+        int value = -99;
+        if (it.value_type == BLE_VAL_INT) {
+          value = std::stoi(it.value);
+        }
+        if (it.write && pChar && pNotifyChar) {
+          Log.trace(F("processing Switchbot %s" CR), it.value.c_str());
+          if (pNotifyChar->subscribe(true,
+                                     std::bind(&SBCU_connect::notifyCB,
+                                               this, std::placeholders::_1, std::placeholders::_2,
+                                               std::placeholders::_3, std::placeholders::_4),
+                                     true)) {
+            if (it.value == "open" && it.value_type == BLE_VAL_STRING) {
+              result = pChar->writeValue(OPEN, 7, false);
+              value = 100;
+            } else if (it.value == "close" && it.value_type == BLE_VAL_STRING) {
+              result = pChar->writeValue(CLOSE, 7, false);
+              value = 0;
+            } else if (it.value == "stop" && it.value_type == BLE_VAL_STRING) {
+              result = pChar->writeValue(STOP, 6, false);
+            } else if (it.value_type == BLE_VAL_INT) {
+              if (value >= 0 && value <= 100) {
+                byte posByte = (byte)value;
+                MOVE[6] = posByte;
+                result = pChar->writeValue(MOVE, 7, false);
+              }
+            } else if (value == -1 && it.value_type == BLE_VAL_INT) {
+              result = pChar->writeValue(STOP, 6, false);
+            }
+
+            if (result) {
+              m_taskHandle = xTaskGetCurrentTaskHandle();
+              if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(BLE_CNCT_TIMEOUT)) == pdFALSE) {
+                m_taskHandle = nullptr;
+              }
+              result = m_notifyVal == 0x01;
+            }
+          }
+        }
+
+        it.complete = result;
+        if (result || it.ttl <= 1) {
+          StaticJsonDocument<JSON_MSG_BUFFER> BLEdataBuffer;
+          JsonObject BLEdata = BLEdataBuffer.to<JsonObject>();
+          BLEdata["id"] = it.addr;
+          if (value != -99 || value != -1)
+            BLEdata["position"] = value;
+          buildTopicFromId(BLEdata, subjectBTtoMQTT);
+          enqueueJsonObject(BLEdata, QueueSemaphoreTimeOutTask);
         }
       }
     }

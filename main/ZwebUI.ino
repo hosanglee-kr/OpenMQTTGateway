@@ -46,7 +46,7 @@ QueueHandle_t webUIQueue;
 WebServer server(80);
 
 /*------------------- External functions ----------------------*/
-extern void eraseAndRestart();
+extern void erase(bool restart);
 extern unsigned long uptime();
 
 /*------------------- Web Console Globals ----------------------*/
@@ -616,7 +616,7 @@ void handleWI() {
       response += String(wifi_script);
       response += String(script);
       response += String(style);
-      snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_wifi_body, jsonChar, gateway_name, WiFiScan.c_str(), WiFi.SSID());
+      snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_wifi_body, jsonChar, gateway_name, WiFiScan.c_str(), WiFi.SSID().c_str());
       response += String(buffer);
       snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, footer, OMG_VERSION);
       response += String(buffer);
@@ -658,7 +658,7 @@ void handleWI() {
         server.send(200, "text/html", response);
 
         delay(2000); // Wait for web page to be sent before
-        MQTTtoSYS((char*)topic.c_str(), WEBtoSYS);
+        XtoSYS((char*)topic.c_str(), WEBtoSYS);
         return;
       } else {
         Log.warning(F("[WebUI] No changes" CR));
@@ -675,7 +675,7 @@ void handleWI() {
   response += String(wifi_script);
   response += String(script);
   response += String(style);
-  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_wifi_body, jsonChar, gateway_name, WiFiScan.c_str(), WiFi.SSID());
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_wifi_body, jsonChar, gateway_name, WiFiScan.c_str(), WiFi.SSID().c_str());
   response += String(buffer);
   snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, footer, OMG_VERSION);
   response += String(buffer);
@@ -692,7 +692,8 @@ void handleWI() {
  * T: handleMQ Arg: 4, sc=on
  * T: handleMQ Arg: 5, h=
  * T: handleMQ Arg: 6, mt=home/
- * T: handleMQ Arg: 7, save=
+ * T: handleMQ Arg: 7 dp=homeassistant (#ifdef ZmqttDiscovery)
+ * T: handleMQ Arg: 8, save=
  */
 void handleMQ() {
   WEBUI_TRACE_LOG(F("handleMQ: uri: %s, args: %d, method: %d" CR), server.uri(), server.args(), server.method());
@@ -706,6 +707,7 @@ void handleMQ() {
       JsonObject WEBtoSYS = WEBtoSYSBuffer.to<JsonObject>();
       bool update = false;
 
+#  if !MQTT_BROKER_MODE
       if (server.hasArg("mh")) {
         WEBtoSYS["mqtt_server"] = server.arg("mh");
         if (strncmp(cnt_parameters_array[CNT_DEFAULT_INDEX].mqtt_server, server.arg("mh").c_str(), parameters_size)) {
@@ -746,6 +748,7 @@ void handleMQ() {
           WEBtoSYS.remove(it);
         }
       }
+#  endif
 
       if (server.hasArg("h")) {
         WEBtoSYS["gateway_name"] = server.arg("h");
@@ -760,11 +763,19 @@ void handleMQ() {
           update = true;
         }
       }
+#  ifdef ZmqttDiscovery
+      if (server.hasArg("dp")) {
+        WEBtoSYS["discovery_prefix"] = server.arg("dp");
+        if (strncmp(discovery_prefix, server.arg("dp").c_str(), parameters_size)) {
+          update = true;
+        }
+      }
+#  endif
 
 #  ifndef ESPWifiManualSetup
       if (update) {
         Log.warning(F("[WebUI] Save MQTT and Reconnect" CR));
-        WEBtoSYS["cnt_index"] = 1; // For the moment we only enable to change index 1 with WebUI
+        WEBtoSYS["cnt_index"] = CNT_DEFAULT_INDEX;
         WEBtoSYS["save_cnt"] = true;
         char jsonChar[100];
         serializeJson(modules, jsonChar, measureJson(modules) + 1);
@@ -783,7 +794,7 @@ void handleMQ() {
 
         delay(2000); // Wait for web page to be sent before
         String topic = String(mqtt_topic) + String(gateway_name) + String(subjectMQTTtoSYSset);
-        MQTTtoSYS((char*)topic.c_str(), WEBtoSYS);
+        XtoSYS((char*)topic.c_str(), WEBtoSYS);
         return;
       } else {
         Log.warning(F("[WebUI] No changes" CR));
@@ -801,8 +812,20 @@ void handleMQ() {
   String response = String(buffer);
   response += String(script);
   response += String(style);
-  // mqtt server (mh), mqtt port (ml), mqtt username (mu), mqtt password (mp), secure connection (sc), server certificate (msc), topic (mt)
+  // mqtt server (mh), mqtt port (ml), mqtt username (mu), mqtt password (mp), secure connection (sc), server certificate (msc), mqtt topic (mt), discovery prefix (dp) (last one only #ifdef ZmqttDiscovery)
+#  if MQTT_BROKER_MODE
+#    ifdef ZmqttDiscovery
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_mqtt_body, jsonChar, gateway_name, "", "1883", "", "", gateway_name, mqtt_topic, discovery_prefix);
+#    else
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_mqtt_body, jsonChar, gateway_name, "", "1883", "", "", gateway_name, mqtt_topic);
+#    endif
+#  else
+#    ifdef ZmqttDiscovery
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_mqtt_body, jsonChar, gateway_name, cnt_parameters_array[CNT_DEFAULT_INDEX].mqtt_server, cnt_parameters_array[CNT_DEFAULT_INDEX].mqtt_port, cnt_parameters_array[CNT_DEFAULT_INDEX].mqtt_user, (cnt_parameters_array[CNT_DEFAULT_INDEX].isConnectionSecure ? "checked" : ""), gateway_name, mqtt_topic, discovery_prefix);
+#    else
   snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_mqtt_body, jsonChar, gateway_name, cnt_parameters_array[CNT_DEFAULT_INDEX].mqtt_server, cnt_parameters_array[CNT_DEFAULT_INDEX].mqtt_port, cnt_parameters_array[CNT_DEFAULT_INDEX].mqtt_user, (cnt_parameters_array[CNT_DEFAULT_INDEX].isConnectionSecure ? "checked" : ""), gateway_name, mqtt_topic);
+#    endif
+#  endif
   response += String(buffer);
   snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, footer, OMG_VERSION);
   response += String(buffer);
@@ -855,7 +878,7 @@ void handleCG() {
 
     delay(2000); // Wait for web page to be sent before
     String topic = String(mqtt_topic) + String(gateway_name) + String(subjectMQTTtoSYSset);
-    MQTTtoSYS((char*)topic.c_str(), WEBtoSYS);
+    XtoSYS((char*)topic.c_str(), WEBtoSYS);
   } else {
     Log.warning(F("[WebUI] No changes" CR));
   }
@@ -1214,7 +1237,7 @@ void handleRT() {
     response += String(buffer);
     server.send(200, "text/html", response);
 
-    eraseAndRestart();
+    erase(true);
   } else {
     handleCN();
   }
@@ -1265,9 +1288,9 @@ void handleCL() {
 
   requestToken = esp_random();
 #    ifdef ESP32_ETHERNET
-  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_cloud_body, jsonChar, gateway_name, " cloud checked", " Not", (String(CLOUDGATEWAY) + "token/start").c_str(), (char*)ETH.macAddress().c_str(), ("http://" + String(ip2CharArray(ETH.localIP())) + "/").c_str(), gateway_name, uptime(), requestToken);
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_cloud_body, jsonChar, gateway_name, " cloud checked", " Not", (String(CLOUDGATEWAY) + "token/start").c_str(), (char*)ETH.macAddress().c_str(), ("http://" + String(TheengsUtils::ip2CharArray(ETH.localIP())) + "/").c_str(), gateway_name, uptime(), requestToken);
 #    else
-  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_cloud_body, jsonChar, gateway_name, cloudEnabled, deviceToken, (String(CLOUDGATEWAY) + "token/start").c_str(), (char*)WiFi.macAddress().c_str(), ("http://" + String(ip2CharArray(WiFi.localIP())) + "/").c_str(), gateway_name, uptime(), requestToken);
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_cloud_body, jsonChar, gateway_name, cloudEnabled, deviceToken, (String(CLOUDGATEWAY) + "token/start").c_str(), (char*)WiFi.macAddress().c_str(), ("http://" + String(TheengsUtils::ip2CharArray(WiFi.localIP())) + "/").c_str(), gateway_name, uptime(), requestToken);
 #    endif
   response += String(buffer);
   snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, footer, OMG_VERSION);
@@ -1431,7 +1454,7 @@ void handleUP() {
 
         String output;
         serializeJson(WEBtoSYS, output);
-        Log.notice(F("[WebUI] MQTTtoSYSupdate %s" CR), output.c_str());
+        Log.notice(F("[WebUI] XtoSYSupdate %s" CR), output.c_str());
       }
 
       String topic = String(mqtt_topic) + String(gateway_name) + String(subjectMQTTtoSYSupdate);
@@ -1447,7 +1470,7 @@ void handleUP() {
 
           String output;
           serializeJson(WEBtoSYS, output);
-          Log.notice(F("[WebUI] MQTTtoSYSupdate %s" CR), output.c_str());
+          Log.notice(F("[WebUI] XtoSYSupdate %s" CR), output.c_str());
         }
 
         String topic = String(mqtt_topic) + String(gateway_name) + String(subjectMQTTtoSYSupdate);
@@ -1511,7 +1534,7 @@ void handleCS() {
       String command = c1.substring(c1.indexOf(' ') + 1);
       if (command.length()) {
         WEBUI_TRACE_LOG(F("[WebUI] handleCS inject MQTT Command topic: '%s', command: '%s'" CR), cmdTopic.c_str(), command.c_str());
-        receivingMQTT((char*)cmdTopic.c_str(), (char*)command.c_str());
+        receivingDATA(cmdTopic.c_str(), command.c_str());
       } else {
         Log.warning(F("[WebUI] Missing command: '%s', command: '%s'" CR), cmdTopic.c_str(), command.c_str());
       }
@@ -1613,10 +1636,10 @@ void WebUISetup() {
   server.on("/up", handleUP); // Firmware Upgrade
 #  endif
   server.on("/cn", handleCN); // Configuration
-  server.on("/wi", handleWI); // Configure Wifi
-  server.on("/mq", handleMQ); // Configure MQTT
+  server.on("/wi", HTTP_POST, handleWI); // Configure Wifi
+  server.on("/mq", HTTP_POST, handleMQ); // Configure MQTT
 #  ifndef ESPWifiManualSetup
-  server.on("/cg", handleCG); // Configure gateway"
+  server.on("/cg", HTTP_POST, handleCG); // Configure gateway"
 #  endif
   server.on("/wu", handleWU); // Configure WebUI
 #  ifdef ZgatewayLORA
@@ -1661,7 +1684,7 @@ void WebUILoop() {
   }
 }
 
-void MQTTtoWebUI(char* topicOri, JsonObject& WebUIdata) { // json object decoding
+void XtoWebUI(const char* topicOri, JsonObject& WebUIdata) { // json object decoding
   bool success = false;
   if (cmpToMainTopic(topicOri, subjectMQTTtoWebUIset)) {
     WEBUI_TRACE_LOG(F("MQTTtoWebUI json set" CR));
@@ -1700,7 +1723,7 @@ void MQTTtoWebUI(char* topicOri, JsonObject& WebUIdata) { // json object decodin
     if (success) {
       stateWebUIStatus();
     } else {
-      Log.error(F("[ WebUI ] MQTTtoWebUI Fail json" CR), WebUIdata);
+      Log.error(F("[ WebUI ] XtoWebUI Fail json" CR), WebUIdata);
     }
   }
 }
@@ -1718,7 +1741,7 @@ String stateWebUIStatus() {
 
   // WebUIdata["currentMessage"] = currentWebUIMessage;
   WebUIdata["origin"] = subjectWebUItoMQTT;
-  handleJsonEnqueue(WebUIdata);
+  enqueueJsonObject(WebUIdata);
   return output;
 }
 
@@ -1914,7 +1937,7 @@ void webUIPubPrint(const char* topicori, JsonObject& data) {
             // Queue completed message
 
             if (xQueueSend(webUIQueue, (void*)&message, 0) != pdTRUE) {
-              Log.error(F("[ WebUI ] webUIQueue full, discarding signal %s" CR), message->title);
+              Log.warning(F("[ WebUI ] webUIQueue full, discarding signal %s" CR), message->title);
               free(message);
             } else {
               // Log.notice(F("[ WebUI ] Queued %s" CR), message->title);
@@ -1980,7 +2003,7 @@ void webUIPubPrint(const char* topicori, JsonObject& data) {
           // Queue completed message
 
           if (xQueueSend(webUIQueue, (void*)&message, 0) != pdTRUE) {
-            Log.error(F("[ WebUI ] webUIQueue full, discarding signal %s" CR), message->title);
+            Log.warning(F("[ WebUI ] webUIQueue full, discarding signal %s" CR), message->title);
             free(message);
           } else {
             // Log.notice(F("[ WebUI ] Queued %s" CR), message->title);
@@ -2255,7 +2278,7 @@ void webUIPubPrint(const char* topicori, JsonObject& data) {
                 properties[property] = "impedance: " + (String)imp + "ohm ";
               }
             } else if (data["type"] == "UNIQ") {
-              if (data["model_id"] == "M1017") {
+              if (data["model_id"] == "M1017" || data["model_id"] == "HOBOMX2001") {
                 if (data.containsKey("lvl_cm")) {
                   property++;
                   char lvl[5];
@@ -2308,7 +2331,7 @@ void webUIPubPrint(const char* topicori, JsonObject& data) {
               line4.toCharArray(message->line4, WEBUI_TEXT_WIDTH);
 
               if (xQueueSend(webUIQueue, (void*)&message, 0) != pdTRUE) {
-                Log.error(F("[ WebUI ] webUIQueue full, discarding signal %s" CR), message->title);
+                Log.warning(F("[ WebUI ] webUIQueue full, discarding signal %s" CR), message->title);
                 free(message);
               } else {
                 // Log.notice(F("[ WebUI ] Queued %s" CR), message->title);
@@ -2366,7 +2389,7 @@ void webUIPubPrint(const char* topicori, JsonObject& data) {
           // Queue completed message
 
           if (xQueueSend(webUIQueue, (void*)&message, 0) != pdTRUE) {
-            Log.error(F("[ WebUI ] webUIQueue full, discarding signal %s" CR), message->title);
+            Log.warning(F("[ WebUI ] webUIQueue full, discarding signal %s" CR), message->title);
             free(message);
           } else {
             // Log.notice(F("[ WebUI ] Queued %s" CR), message->title);
@@ -2418,7 +2441,7 @@ void webUIPubPrint(const char* topicori, JsonObject& data) {
           // Queue completed message
 
           if (xQueueSend(webUIQueue, (void*)&message, 0) != pdTRUE) {
-            Log.error(F("[ WebUI ] webUIQueue full, discarding signal %s" CR), message->title);
+            Log.warning(F("[ WebUI ] webUIQueue full, discarding signal %s" CR), message->title);
             free(message);
           } else {
             // Log.notice(F("[ WebUI ] Queued %s" CR), message->title);

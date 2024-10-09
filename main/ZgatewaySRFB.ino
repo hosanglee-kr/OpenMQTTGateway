@@ -54,7 +54,7 @@ void _rfbSend(byte* message) {
 
 void _rfbSend(byte* message, int times) {
   char buffer[RF_MESSAGE_SIZE];
-  _rawToHex(message, buffer, RF_MESSAGE_SIZE);
+  TheengsUtils::_rawToHex(message, buffer, RF_MESSAGE_SIZE);
   Log.notice(F("[RFBRIDGE] Sending MESSAGE" CR));
 
   for (int i = 0; i < times; i++) {
@@ -67,7 +67,7 @@ void _rfbSend(byte* message, int times) {
   }
 }
 
-bool SRFBtoMQTT() {
+bool SRFBtoX() {
   static bool receiving = false;
 
   while (Serial.available()) {
@@ -99,35 +99,35 @@ void _rfbDecode() {
   char buffer[RF_MESSAGE_SIZE * 2 + 1] = {0};
 
   if (action == RF_CODE_RFIN) {
-    _rawToHex(&_uartbuf[1], buffer, RF_MESSAGE_SIZE);
+    TheengsUtils::_rawToHex(&_uartbuf[1], buffer, RF_MESSAGE_SIZE);
 
     Log.trace(F("Creating SRFB buffer" CR));
     StaticJsonDocument<JSON_MSG_BUFFER> SRFBdataBuffer;
     JsonObject SRFBdata = SRFBdataBuffer.to<JsonObject>();
     SRFBdata["raw"] = String(buffer).substring(0, 18);
 
-    int val_Tsyn = (int)(int)value_from_hex_data(buffer, 0, 4, false, false);
+    int val_Tsyn = (int)(int)TheengsUtils::value_from_hex_data(buffer, 0, 4, false, false);
     SRFBdata["delay"] = (int)val_Tsyn;
 
-    int val_Tlow = (int)value_from_hex_data(buffer, 4, 4, false, false);
+    int val_Tlow = (int)TheengsUtils::value_from_hex_data(buffer, 4, 4, false, false);
     SRFBdata["val_Tlow"] = (int)val_Tlow;
 
-    int val_Thigh = (int)value_from_hex_data(buffer, 8, 4, false, false);
+    int val_Thigh = (int)TheengsUtils::value_from_hex_data(buffer, 8, 4, false, false);
     SRFBdata["val_Thigh"] = (int)val_Thigh;
 
-    unsigned long MQTTvalue = (unsigned long)value_from_hex_data(buffer, 12, 8, false, false);
+    unsigned long MQTTvalue = (unsigned long)TheengsUtils::value_from_hex_data(buffer, 12, 8, false, false);
     SRFBdata["value"] = (unsigned long)MQTTvalue;
 
     if (!isAduplicateSignal(MQTTvalue) && MQTTvalue != 0) { // conditions to avoid duplications of RF -->MQTT
       Log.trace(F("Adv data SRFBtoMQTT" CR));
       SRFBdata["origin"] = subjectSRFBtoMQTT;
-      handleJsonEnqueue(SRFBdata);
+      enqueueJsonObject(SRFBdata);
       Log.trace(F("Store val: %lu" CR), MQTTvalue);
       storeSignalValue(MQTTvalue);
       if (repeatSRFBwMQTT) {
         Log.trace(F("Publish SRFB for rpt" CR));
         SRFBdata["origin"] = subjectMQTTtoSRFB;
-        handleJsonEnqueue(SRFBdata);
+        enqueueJsonObject(SRFBdata);
       }
     }
     _rfbAck();
@@ -145,7 +145,7 @@ void _rfbAck() {
 }
 
 #  if simpleReceiving
-void MQTTtoSRFB(char* topicOri, char* datacallback) {
+void XtoSRFB(const char* topicOri, const char* datacallback) {
   // RF DATA ANALYSIS
   String topic = topicOri;
   int valueRPT = 0;
@@ -233,7 +233,7 @@ void MQTTtoSRFB(char* topicOri, char* datacallback) {
       valueRPT = 1;
 
     byte message_b[RF_MESSAGE_SIZE];
-    _hexToRaw(datacallback, message_b, RF_MESSAGE_SIZE);
+    TheengsUtils::_hexToRaw(datacallback, message_b, RF_MESSAGE_SIZE);
     _rfbSend(message_b, valueRPT);
     // Acknowledgement to the GTWRF topic
     pub(subjectGTWSRFBtoMQTT, datacallback); // we acknowledge the sending by publishing the value to an acknowledgement topic, for the moment even if it is a signal repetition we acknowledge also
@@ -241,7 +241,7 @@ void MQTTtoSRFB(char* topicOri, char* datacallback) {
 }
 #  endif
 #  if jsonReceiving
-void MQTTtoSRFB(char* topicOri, JsonObject& SRFBdata) {
+void XtoSRFB(const char* topicOri, JsonObject& SRFBdata) {
   // RF DATA ANALYSIS
   const char* raw = SRFBdata["raw"];
   int valueRPT = SRFBdata["repeat"] | 1;
@@ -250,7 +250,7 @@ void MQTTtoSRFB(char* topicOri, JsonObject& SRFBdata) {
     if (raw) { // send raw in priority when defined in the json
       Log.trace(F("MQTTtoSRFB raw ok" CR));
       byte message_b[RF_MESSAGE_SIZE];
-      _hexToRaw(raw, message_b, RF_MESSAGE_SIZE);
+      TheengsUtils::_hexToRaw(raw, message_b, RF_MESSAGE_SIZE);
       _rfbSend(message_b, valueRPT);
     } else {
       unsigned long data = SRFBdata["value"];
@@ -300,7 +300,8 @@ void MQTTtoSRFB(char* topicOri, JsonObject& SRFBdata) {
 
         Log.notice(F("MQTTtoSRFB OK" CR));
         _rfbSend(message_b, valueRPT);
-        pub(subjectGTWSRFBtoMQTT, SRFBdata); // we acknowledge the sending by publishing the value to an acknowledgement topic, for the moment even if it is a signal repetition we acknowledge also
+        SRFBdata["origin"] = subjectGTWSRFBtoMQTT;
+        enqueueJsonObject(SRFBdata); // we acknowledge the sending by publishing the value to an acknowledgement topic, for the moment even if it is a signal repetition we acknowledge also
       } else {
         Log.error(F("MQTTtoSRFB error decoding value" CR));
       }
