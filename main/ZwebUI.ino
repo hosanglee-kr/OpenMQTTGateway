@@ -46,7 +46,7 @@ QueueHandle_t webUIQueue;
 WebServer server(80);
 
 /*------------------- External functions ----------------------*/
-extern void erase(bool restart);
+extern void eraseConfig();
 extern unsigned long uptime();
 
 /*------------------- Web Console Globals ----------------------*/
@@ -1237,7 +1237,7 @@ void handleRT() {
     response += String(buffer);
     server.send(200, "text/html", response);
 
-    erase(true);
+    eraseConfig();
   } else {
     handleCN();
   }
@@ -2054,7 +2054,7 @@ void webUIPubPrint(const char* topicori, JsonObject& data) {
                 }
               }
 
-              if (data.containsKey("extprobe")) {
+              if (data.containsKey("extprobe") && data["extprobe"]) {
                 property++;
                 properties[property] = " ext. probe";
               }

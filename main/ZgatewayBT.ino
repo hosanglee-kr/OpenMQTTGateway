@@ -174,7 +174,8 @@ void BTConfig_fromJson(JsonObject& BTdata, bool startup = false) {
     }
     // Identify if the gateway is enabled or not and stop start accordingly
     if (BTdata.containsKey("enabled") && BTdata["enabled"] == false && BTConfig.enabled == true) {
-      stopProcessing();
+      // Stop the gateway but without deinit to enable a future BT restart
+      stopProcessing(false);
     } else if (BTdata.containsKey("enabled") && BTdata["enabled"] == true && BTConfig.enabled == false) {
       BTProcessLock = false;
       setupBTTasksAndBLE();
@@ -182,11 +183,6 @@ void BTConfig_fromJson(JsonObject& BTdata, bool startup = false) {
   }
   // Home Assistant presence message
   Config_update(BTdata, "hasspresence", BTConfig.presenceEnable);
-#  ifdef ZmqttDiscovery
-  // Create discovery entities
-  btScanParametersDiscovery();
-  btPresenceParametersDiscovery();
-#  endif
   // Time before before active scan
   // Scan interval set - and avoid intervalacts to be lower than interval
   if (BTdata.containsKey("interval") && BTdata["interval"] != 0) {
@@ -790,7 +786,7 @@ void BLEconnect() {
 void BLEconnect() {}
 #  endif
 
-void stopProcessing() {
+void stopProcessing(bool deinit) {
   if (BTConfig.enabled) {
     BTProcessLock = true;
     // We stop the scan
@@ -809,6 +805,9 @@ void stopProcessing() {
       vTaskDelete(xProcBLETaskHandle);
       xSemaphoreGive(semaphoreBLEOperation);
     }
+    // Using deinit to free memory, should only be used if we are going to restart the gateway
+    if (deinit)
+      BLEDevice::deinit(true);
   }
   Log.notice(F("BLE gateway stopped, free heap: %d" CR), ESP.getFreeHeap());
 }
@@ -939,7 +938,7 @@ void launchBTDiscovery(bool overrideDiscovery) {
         Log.trace(F("properties: %s" CR), properties.c_str());
         std::string brand = decoder.getTheengAttribute(p->sensorModel_id, "brand");
         std::string model = decoder.getTheengAttribute(p->sensorModel_id, "model");
-#    ifdef ForceDeviceName
+#    if ForceDeviceName
         if (p->name[0] != '\0') {
           model = p->name;
         }
@@ -1269,6 +1268,27 @@ void PublishDeviceData(JsonObject& BLEdata) {
       Log.notice(F("Not a sensor device filtered" CR));
       return;
     }
+
+#    if BLEDecoder
+    if (enableMultiGTWSync && BLEdata.containsKey("model_id") && BLEdata.containsKey("id")) {
+      // Publish tracker sync message
+      bool isTracker = false;
+      std::string tag = decoder.getTheengAttribute(BLEdata["model_id"].as<const char*>(), "tag");
+      if (tag.length() >= 4) {
+        isTracker = checkIfIsTracker(tag[3]);
+      }
+
+      if (isTracker) {
+        StaticJsonDocument<JSON_MSG_BUFFER> BLEdataBuffer;
+        JsonObject TrackerSyncdata = BLEdataBuffer.to<JsonObject>();
+        TrackerSyncdata["gatewayid"] = gateway_name;
+        TrackerSyncdata["trackerid"] = BLEdata["id"].as<const char*>();
+        String topic = String(mqtt_topic) + String(subjectTrackerSync);
+        TrackerSyncdata["topic"] = topic.c_str();
+        enqueueJsonObject(TrackerSyncdata);
+      }
+    }
+#    endif
   } else {
     Log.notice(F("Low rssi, device filtered" CR));
     return;
@@ -1334,22 +1354,27 @@ void immediateBTAction(void* pvParameters) {
     }
 
     if (xSemaphoreTake(semaphoreBLEOperation, pdMS_TO_TICKS(5000)) == pdTRUE) {
-      // swap the vectors so only this device is processed
-      std::vector<BLEdevice*> dev_swap;
-      dev_swap.push_back(getDeviceByMac(BLEactions.back().addr));
-      std::swap(devices, dev_swap);
+      if (xSemaphoreTake(semaphoreCreateOrUpdateDevice, pdMS_TO_TICKS(QueueSemaphoreTimeOutTask)) == pdTRUE) {
+        // swap the vectors so only this device is processed
+        std::vector<BLEdevice*> dev_swap;
+        dev_swap.push_back(getDeviceByMac(BLEactions.back().addr));
+        std::swap(devices, dev_swap);
 
-      std::vector<BLEAction> act_swap;
-      act_swap.push_back(BLEactions.back());
-      BLEactions.pop_back();
-      std::swap(BLEactions, act_swap);
+        std::vector<BLEAction> act_swap;
+        act_swap.push_back(BLEactions.back());
+        BLEactions.pop_back();
+        std::swap(BLEactions, act_swap);
 
-      // Unlock here to allow the action to be performed
-      BTProcessLock = false;
-      BLEconnect();
-      // back to normal
-      std::swap(devices, dev_swap);
-      std::swap(BLEactions, act_swap);
+        // Unlock here to allow the action to be performed
+        BTProcessLock = false;
+        BLEconnect();
+        // back to normal
+        std::swap(devices, dev_swap);
+        std::swap(BLEactions, act_swap);
+        xSemaphoreGive(semaphoreCreateOrUpdateDevice);
+      } else {
+        Log.error(F("CreateOrUpdate Semaphore NOT taken" CR));
+      }
 
       // If we stopped the scheduled connect for this action, do the scheduled now
       if (millis() > (timeBetweenConnect + BTConfig.intervalConnect) && BTConfig.bleConnect) {
@@ -1358,7 +1383,8 @@ void immediateBTAction(void* pvParameters) {
       }
       xSemaphoreGive(semaphoreBLEOperation);
     } else {
-      Log.error(F("BLE busy - command not sent" CR));
+      Log.error(F("BLE busy - immediateBTAction not sent" CR));
+      gatewayState = GatewayState::ERROR;
       StaticJsonDocument<JSON_MSG_BUFFER> BLEdataBuffer;
       JsonObject BLEdata = BLEdataBuffer.to<JsonObject>();
       BLEdata["id"] = BLEactions.back().addr;
@@ -1550,8 +1576,16 @@ void XtoBT(const char* topicOri, JsonObject& BTdata) { // json object decoding
       XtoBTAction(BTdata);
       xSemaphoreGive(semaphoreBLEOperation);
     } else {
-      Log.error(F("BLE busy - command not sent" CR));
+      Log.error(F("BLE busy - BTActions not sent" CR));
       gatewayState = GatewayState::ERROR;
+    }
+  } else if (strstr(topicOri, subjectTrackerSync) != NULL) {
+    if (BTdata.containsKey("gatewayid") && BTdata.containsKey("trackerid") && BTdata["gatewayid"] != gateway_name) {
+      BLEdevice* device = getDeviceByMac(BTdata["trackerid"].as<const char*>());
+      if (device != &NO_BT_DEVICE_FOUND && device->lastUpdate != 0) {
+        device->lastUpdate = 0;
+        Log.notice(F("Tracker %s disassociated by gateway %s" CR), BTdata["trackerid"].as<const char*>(), BTdata["gatewayid"].as<const char*>());
+      }
     }
   }
 }
