@@ -130,7 +130,7 @@ void announceDeviceTrigger(bool use_gateway_info, char* topic, char* type, char*
     strcat(state_topic, gateway_name);
 
     strcat(state_topic, topic);
-    sensor["topic"] = state_topic;
+    sensor["info_topic"] = state_topic;
   }
 
   /* Set The Devices */
@@ -187,7 +187,7 @@ void announceDeviceTrigger(bool use_gateway_info, char* topic, char* type, char*
   sensor["device"] = device; //device representing the board
 
   /* Publish on the topic */
-  String topic_to_publish = String(discovery_prefix) + "/device_automation/" + String(unique_id) + "/config";
+  String topic_to_publish = String(discovery_prefix) + "/device_automation/" + String(Gateway_Short_Name) + "/" + String(unique_id) + "/config";
   Log.trace(F("Announce Device Trigger  %s" CR), topic_to_publish.c_str());
   sensor["topic"] = topic_to_publish;
   sensor["retain"] = true;
@@ -242,7 +242,7 @@ void createDiscovery(const char* sensor_type,
                      const char* payload_available, const char* payload_not_available, bool gateway_entity, const char* cmd_topic,
                      const char* device_name, const char* device_manufacturer, const char* device_model, const char* device_id, bool retainCmd,
                      const char* state_class, const char* state_off, const char* state_on, const char* enum_options, const char* command_template) {
-  StaticJsonDocument<JSON_MSG_BUFFER_MAX> jsonBuffer;
+  StaticJsonDocument<JSON_MSG_BUFFER> jsonBuffer;
   JsonObject sensor = jsonBuffer.to<JsonObject>();
 
   // If a component cannot render it's state (f.i. KAKU relays) no state topic
@@ -329,7 +329,11 @@ void createDiscovery(const char* sensor_type,
       int value = std::stoi(payload_on);
       sensor["pos_open"] = value; // open value for curtain
     } else {
-      sensor["pl_on"] = payload_on; // payload_on for the rest
+      if (strcmp(payload_on, "True") == 0 || strcmp(payload_on, "true") == 0) {
+        sensor["pl_on"] = true;
+      } else {
+        sensor["pl_on"] = payload_on; // payload_on for the rest
+      }
     }
   }
   if (payload_off && payload_off[0]) {
@@ -339,7 +343,11 @@ void createDiscovery(const char* sensor_type,
       int value = std::stoi(payload_off);
       sensor["pos_clsd"] = value; // closed value for curtain
     } else {
-      sensor["pl_off"] = payload_off; //payload_off
+      if (strcmp(payload_off, "False") == 0 || strcmp(payload_off, "false") == 0) {
+        sensor["pl_off"] = false;
+      } else {
+        sensor["pl_off"] = payload_off; //payload_off for the rest
+      }
     }
   }
   if (command_template && command_template[0]) {

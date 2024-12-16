@@ -69,7 +69,7 @@ bool firstStart = true;
 #define ARDUINOJSON_ENABLE_STD_STRING 1
 
 #include <queue>
-int queueLength = 0;
+int queueLength = -1; // We want to give one cycle of the loop before starting modules that are big msgs producers (example BT), to avoid queue overloading
 unsigned long queueLengthSum = 0;
 unsigned long blockedMessages = 0;
 unsigned long receivedMessages = 0;
@@ -522,11 +522,11 @@ void emptyQueue() {
   if (queueLength > maxQueueLength) {
     maxQueueLength = queueLength;
   }
-  if (queueLength == 0) {
+  if (queueLength <= 0) {
     return;
   }
   Log.trace(F("Dequeue JSON" CR));
-  DynamicJsonDocument jsonBuffer(JSON_MSG_BUFFER);
+  DynamicJsonDocument jsonBuffer(JSON_MSG_BUFFER_MAX);
   JsonObject obj = jsonBuffer.to<JsonObject>();
 #ifdef ESP32
   if (xSemaphoreTake(xQueueMutex, pdMS_TO_TICKS(QueueSemaphoreTimeOutTask)) == pdFALSE) {
@@ -585,7 +585,17 @@ bool pub(JsonObject& data) {
     data.remove("origin");
   } else if (data.containsKey("topic") && data["topic"].is<const char*>()) {
     topic = data["topic"].as<const char*>();
-    data.remove("topic");
+    if (data.containsKey("info_topic") && data["info_topic"].is<const char*>()) {
+      // Sometimes it is necessary to provide information about the publishing topic, not just use it.
+      // This is the case, for example, for the RF2MQTT device trigger announcement message where the
+      // temporary variable info_topic provides information about the topic that will be used to publish the message,
+      // and it can be different of current message topic (This is a clever pun, I hope it's clear).
+      data["topic"].set(data["info_topic"]);
+      data.remove("info_topic");
+    } else {
+      data.remove("topic");
+    }
+
   } else {
     Log.error(F("No topic or origin in JSON, not published" CR));
     gatewayState = GatewayState::ERROR;
@@ -924,6 +934,9 @@ void setupMQTT() {
 
   mqtt.reset(new MQTTServer());
   mqtt->begin();
+#  ifdef ZgatewayBT
+  BTProcessLock = !BTConfig.enabled; // Release BLE processes at start if enabled
+#  endif
 }
 #else
 
@@ -1122,6 +1135,10 @@ void setupMQTT() {
 #  ifdef ZgatewayIR
   // subject on which other OMG will publish, this OMG will store these msg and by the way don't republish them if they have been already published
   mqtt->subscribe(subjectMultiGTWIR, receivingDATA, mqtt_max_payload_size);
+#  endif
+
+#  if enableMultiGTWSync
+  mqtt->subscribe(String(mqtt_topic) + subjectTrackerSync, receivingDATA, mqtt_max_payload_size);
 #  endif
 
   mqtt->begin();
@@ -1648,7 +1665,7 @@ void setOTA() {
 #ifdef ESP32
     ProcessLock = true;
 #  ifdef ZgatewayBT
-    stopProcessing();
+    stopProcessing(true);
 #  endif
 #endif
     lpDisplayPrint("OTA in progress");
@@ -1887,7 +1904,7 @@ void blockingWaitForReset() {
           Log.trace(F("mounted file system" CR));
           if (SPIFFS.exists("/config.json")) {
             Log.notice(F("Erasing ESP Config, restarting" CR));
-            erase(true);
+            eraseConfig();
           }
         }
         delay(30000);
@@ -2293,7 +2310,7 @@ void setupWiFiManager() {
       esp_wifi_set_config(WIFI_IF_AP, &conf);
 #  endif
 
-      bool shouldRestart = (gatewayState != GatewayState::BROKER_CONNECTED && gatewayState != GatewayState::NTWK_CONNECTED);
+      bool shouldRestart = (gatewayState != GatewayState::BROKER_CONNECTED && !ethConnected && gatewayState != GatewayState::NTWK_CONNECTED);
 
 #  ifdef USE_BLUFI
       shouldRestart = shouldRestart && !isStaConnecting();
@@ -2441,7 +2458,7 @@ void sleep() {
 #  endif
   Log.trace(F("Deactivating ESP32 components" CR));
 #  ifdef ZgatewayBT
-  stopProcessing();
+  stopProcessing(true);
   ProcessLock = true;
 #  endif
 #  pragma GCC diagnostic push
@@ -2728,9 +2745,9 @@ float intTemperatureRead() {
 #endif
 
 /*
- Erase flash and restart the ESP
+ Erase config and restart the ESP
 */
-void erase(bool restart) {
+void eraseConfig() {
 #ifdef SecondaryModule
   // Erase the secondary module config
   String eraseCmdStr = "{\"cmd\":\"" + String(eraseCmd) + "\"}";
@@ -2742,15 +2759,11 @@ void erase(bool restart) {
 
 #if defined(ESP8266)
   WiFi.disconnect(true);
-#  ifndef ESPWifiManualSetup
-  wifiManager.resetSettings();
-#  endif
-  delay(5000);
+  ESP.eraseConfig();
 #else
   nvs_flash_erase();
 #endif
-  if (restart)
-    ESPRestart(0);
+  ESPRestart(0);
 }
 
 String stateMeasures() {
@@ -3189,10 +3202,10 @@ void MQTTHttpsFWUpdate(const char* topicOri, JsonObject& HttpsFwUpdateData) {
 #  ifdef ESP32
       ProcessLock = true;
 #    ifdef ZgatewayBT
-      stopProcessing();
+      stopProcessing(true);
 #    endif
 #  endif
-      Log.warning(F("Starting firmware update" CR));
+      Log.warning(F("Starting firmware update with %d freeHeap" CR), ESP.getFreeHeap());
       gatewayState = GatewayState::REMOTE_OTA_IN_PROGRESS;
 
       StaticJsonDocument<JSON_MSG_BUFFER> jsondata;
@@ -3234,11 +3247,9 @@ void MQTTHttpsFWUpdate(const char* topicOri, JsonObject& HttpsFwUpdateData) {
           mqtt.reset();
           mqttSetupPending = true;
           update_client = *static_cast<WiFiClientSecure*>(eClient.get());
-        } else
-#  endif
-        {
-          TheengsUtils::syncNTP();
         }
+#  endif
+        TheengsUtils::syncNTP();
 
 #  ifdef ESP32
         update_client.setCACert(ota_cert.c_str());
@@ -3340,7 +3351,7 @@ void XtoSYS(const char* topicOri, JsonObject& SYSdata) { // json object decoding
       if (strstr(cmd, restartCmd) != NULL) { //restart
         ESPRestart(5);
       } else if (strstr(cmd, eraseCmd) != NULL) { //erase and restart
-        erase(true);
+        eraseConfig();
       } else if (strstr(cmd, statusCmd) != NULL) {
         publishState = true;
       }
@@ -3371,7 +3382,7 @@ void XtoSYS(const char* topicOri, JsonObject& SYSdata) { // json object decoding
 #ifdef ESP32
       ProcessLock = true;
 #  ifdef ZgatewayBT
-      stopProcessing();
+      stopProcessing(true);
 #  endif
 #endif
       String prev_ssid = WiFi.SSID();
@@ -3517,7 +3528,7 @@ void XtoSYS(const char* topicOri, JsonObject& SYSdata) { // json object decoding
 #    ifdef ESP32
       ProcessLock = true;
 #      ifdef ZgatewayBT
-      stopProcessing();
+      stopProcessing(true);
 #      endif
 #    endif
 

@@ -95,12 +95,14 @@ void RFtoMQTTdiscovery(uint64_t MQTTvalue) {
   String discovery_topic = String(subjectRFtoMQTT);
 #    endif
 
-  String theUniqueId = getUniqueId("-" + String(switchRF[0]), "-" + String(switchRF[1]));
+  String theUniqueId = getUniqueId(String(switchRF[0]), "-" + String(switchRF[1]));
+  String subType = String(switchRF[0]);
 
   announceDeviceTrigger(
       false,
       (char*)discovery_topic.c_str(),
-      "", "",
+      "received",
+      (char*)subType.c_str(),
       (char*)theUniqueId.c_str(),
       "", "", "", "");
 }
@@ -236,8 +238,8 @@ void XtoRF(const char* topicOri, JsonObject& RFdata) { // json object decoding
       Log.notice(F("RF Protocol:%d" CR), valuePRT);
       Log.notice(F("RF Pulse Lgth: %d" CR), valuePLSL);
       Log.notice(F("Bits nb: %d" CR), valueBITS);
-#    ifdef ZradioCC1101
       disableCurrentReceiver();
+#    ifdef ZradioCC1101
       initCC1101();
       int txPower = RFdata["txpower"] | RF_CC1101_TXPOWER;
       ELECHOUSE_cc1101.setPA((int)txPower);

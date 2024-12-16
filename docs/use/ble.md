@@ -75,13 +75,11 @@ Once the data has been transmitted to the MQTT broker, it can be easily integrat
 Examples of compatible sensors among [our list](https://decoder.theengs.io/devices/devices_by_brand.html: Mi Flora, Mi jia, LYWDS02, LYWSD03MMC, ClearGrass, Mi scale, iBBQ, TPMS
 
 ## Receiving signals from BLE devices for Device Tracker detection
-The gateway will detect BLE trackers from Tile, Nut, TagIt and iTag, as well as other devices with additional properties decoding like Mi Band, Amazfit, RuuviTag and others indicated as Device Trackers in the [compatible BLE devices list](https://decoder.theengs.io/devices/devices.html), and automatically create a device tracker entity following the Home Assistant discovery convention (if auto discovery is activated).
+The gateway will detect BLE trackers from Tile, Nut, TagIt, iTAG, Gigaset G-Tag, TicWatch GTH (Pro), Teltonika FMT100 vehicle tracker and Bosch Nyon eBike computers, as well as other devices with additional properties decoding like Mi Band, Amazfit, RuuviTag and others indicated as Device Trackers in the [compatible BLE devices list](https://decoder.theengs.io/devices/devices.html), and automatically create a device tracker entity following the Home Assistant discovery convention (if auto discovery is activated).
 
 The devicen tracker entity created can be attached to a person to leverage presence detection. The `away` or `not home` state is triggered if the BLE tracker is not detected during the timer defined by `presenceawaytimer`.
  
 ![Away home Home assistant view](../img/OpenMQTTGateway-BLE-tracker-Home-Assistant.png)
-
-If you have multiple gateways, your BLE trackers may not be detected temporary by one gateway but still by the others. In this case you will see the tracker appears offline briefly and online again once it is detected by the others gateways.
 
 By default `presenceawaytimer` is set to 120s, you can change it from the slider in your controller or with the following command (ms)
 
@@ -319,6 +317,11 @@ By the way, if you want to load the default built-in configuration (on any board
 `mosquitto_pub -t home/OpenMQTTGateway/commands/MQTTtoBT/config -m '{"init":true}'`
 Note that it will not change the stored configuration, `erase` or `save` is still needed to overwrite the saved configuration.
 
+## Controlling devices
+::: tip
+To control devices reliably, set the interval between scans to at least 5 seconds and the scan duration to 1 second to ensure commands are successfully transmitted to your devices.
+:::
+
 ## Read/write BLE characteristics over MQTT
 
 The gateway can read and write BLE characteristics from devices and provide the results in an MQTT message.  
@@ -509,9 +512,9 @@ The Switchbot Blind Tilt response :
 }
 ```
 
-## SwitchBot Curtain 3 control (available with HA discovery)
+## SwitchBot Curtain (2/3) control (available with HA discovery)
 
-SwitchBot Curtain 3 devices are automatically discovered and available as a device in the settings Home Assistant Settings menu. The following commands are supported:
+SwitchBot Curtain (2/3) devices are automatically discovered and available as a device in the settings Home Assistant Settings menu. The following commands are supported:
 * Set a percentage
 
 The device can also be controlled over MQTT with a simplified BLE write command.
